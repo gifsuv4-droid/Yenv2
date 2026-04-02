@@ -11,18 +11,19 @@ from flask import Flask
 from threading import Thread
 
 # Web server for uptime monitoring
-app = Flask('')
+app = Flask(__name__)
 
-@app.route('/')
+@app.route("/")
 def home():
     return "Yen is alive."
 
 def run():
-    app.run(host='0.0.0.0', port=3000)
+    app.run(host="0.0.0.0", port=8080, debug=False, use_reloader=False)
 
 def keep_alive():
-    t = Thread(target=run)
-    t.start()
+    server = Thread(target=run)
+    server.daemon = True
+    server.start()
 
 intents = discord.Intents.default()
 intents.message_content = True
