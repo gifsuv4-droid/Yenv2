@@ -11,7 +11,7 @@ from flask import Flask
 from threading import Thread
 
 # Web server for uptime monitoring
-app = Flask('')
+app = Flask('__name__')
 
 @app.route('/')
 def home():
