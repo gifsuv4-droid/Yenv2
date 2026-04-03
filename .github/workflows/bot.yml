@@ -1,4 +1,4 @@
-name: Run Discord Bot
+name: Run Discord Bot v2
 
 on:
   workflow_dispatch:
