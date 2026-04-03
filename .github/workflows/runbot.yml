@@ -1,0 +1,29 @@
+name: Discord Bot Runner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: pwd
+      - run: ls -R
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -r requirements.txt
+
+      - name: Start bot
+        env:
+          TOKEN: ${{ secrets.TOKEN }}
+          GROQ_KEY: ${{ secrets.GROQ_KEY }}
+        run: |
+          echo "Looking for main.py..."
+          find .
+          python main.py
