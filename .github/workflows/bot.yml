@@ -1,28 +1,19 @@
-name: Run Discord Bot
+- name: Checkout repo
+  uses: actions/checkout@v4
 
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: "*/30 * * * *"
+- name: Show files
+  run: ls -R
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
+- name: Setup Python
+  uses: actions/setup-python@v5
+  with:
+    python-version: "3.11"
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+- name: Install requirements
+  run: pip install -r requirements.txt
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install requirements
-        run: pip install -r requirements.txt
-
-      - name: Run bot
-        env:
-          TOKEN: ${{ secrets.TOKEN }}
-          GROQ_KEY: ${{ secrets.GROQ_KEY }}
-        run: python main.py
+- name: Run bot
+  env:
+    TOKEN: ${{ secrets.TOKEN }}
+    GROQ_KEY: ${{ secrets.GROQ_KEY }}
+  run: python main.py
