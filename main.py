@@ -28,6 +28,7 @@ memory_file="memory.json"
 uwu_file="uwu.json"
 profile_file="profiles.json"
 jokes_file="jokes.json"
+gossip_file="gossip.json"
 
 conversation_memory={}
 server_jokes={}
@@ -49,6 +50,7 @@ def save_json(data,file):
 uwulocks=load_json(uwu_file)
 profiles=load_json(profile_file)
 jokes_memory=load_json(jokes_file)
+gossip_memory=load_json(gossip_file)
 
 # ---------- KEEP ALIVE ----------
 
@@ -102,7 +104,7 @@ def should_ai_respond(message,msg):
 
     return False
 
-# ---------- SERVER JOKE LEARNING ----------
+# ---------- MEME / JOKE LEARNING ----------
 
 def learn_joke(msg):
 
@@ -110,21 +112,57 @@ def learn_joke(msg):
 
     for w in words:
 
-        if len(w)>6:
-
+        if len(w)>5:
             server_jokes[w]=server_jokes.get(w,0)+1
+
+    if len(words)>=2:
+
+        phrase=" ".join(words[:2])
+
+        if len(phrase)>6:
+            server_jokes[phrase]=server_jokes.get(phrase,0)+1
+
+# ---------- LORE DETECTION ----------
+
+def detect_lore(msg,gid):
+
+    lore_words=["legend","lore","remember this","historic","never forget"]
+
+    if any(x in msg for x in lore_words):
+
+        jokes_memory.setdefault(gid,[])
+        jokes_memory[gid].append(msg)
+
+        save_json(jokes_memory,jokes_file)
+
+# ---------- GOSSIP SYSTEM ----------
+
+def learn_gossip(msg,user,gid):
+
+    triggers=["i like","i love","i hate","i did","i ate"]
+
+    if any(x in msg for x in triggers):
+
+        gossip_memory.setdefault(gid,[])
+
+        gossip_memory[gid].append(f"{user} once said: {msg}")
+
+        save_json(gossip_memory,gossip_file)
 
 # ---------- AI ----------
 
-def ask_ai(prompt,user_id):
+def ask_ai(prompt,user_id,gid):
 
-    if random.randint(1,10)==1:
-        return random.choice(["yes","no","ok"])
+    if random.randint(1,25)==1:
+        return random.choice(["yes","no","maybe","probably"])
 
     history=conversation_memory.get(user_id,[])
     history_text="\n".join(history)
 
-    jokes=list(server_jokes.keys())[:10]
+    jokes=random.sample(list(server_jokes.keys()),min(5,len(server_jokes))) if server_jokes else []
+
+    gossip=gossip_memory.get(gid,[])
+    gossip=random.choice(gossip) if gossip and random.randint(1,20)==1 else ""
 
     completion=client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -138,6 +176,9 @@ Personality: {personality}
 
 Server inside jokes:
 {jokes}
+
+Possible gossip:
+{gossip}
 
 Rules:
 - maximum 5 lines
@@ -186,8 +227,10 @@ async def on_message(message):
     gid=str(message.guild.id)
 
     learn_joke(msg)
+    detect_lore(msg,gid)
+    learn_gossip(msg,message.author.name,gid)
 
-# ---------- REMEMBER COMMAND ----------
+# ---------- REMEMBER ----------
 
     if msg.startswith("yen remember"):
 
@@ -205,7 +248,7 @@ async def on_message(message):
         await message.channel.send("🧠 remembered.")
         return
 
-# ---------- MEMORY COMMAND ----------
+# ---------- MEMORY ----------
 
     if msg=="yen memory" or "what do you remember" in msg:
 
@@ -217,12 +260,7 @@ async def on_message(message):
 
         memory="\n".join([f"• {x}" for x in server_facts[:10]])
 
-        await message.channel.send(
-f"""🧠 Memories
-
-{memory}
-"""
-        )
+        await message.channel.send(f"🧠 Memories\n\n{memory}")
         return
 
 # ---------- PROFILE ----------
@@ -255,7 +293,7 @@ f"""🧠 Memories
         await message.channel.send("🕯 Yen fades into silence.")
         return
 
-# ---------- PROFILE ----------
+# ---------- PROFILE CMD ----------
 
     if msg=="yen profile":
 
@@ -373,7 +411,7 @@ Likes: {likes}
         if interaction_count%40==0:
             evolve_personality()
 
-        reply=ask_ai(message.content,uid)
+        reply=ask_ai(message.content,uid,gid)
 
         conversation_memory.setdefault(uid,[]).append(message.content)
         conversation_memory[uid].append(reply)
