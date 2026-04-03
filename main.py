@@ -35,6 +35,8 @@ server_jokes={}
 
 MEMORY_LIMIT=6
 
+CREATOR_ID = 1383111113016872980
+
 # ---------- LOAD DATA ----------
 
 def load_json(file):
@@ -153,8 +155,25 @@ def learn_gossip(msg,user,gid):
 
 def ask_ai(prompt,user_id,gid):
 
-    if random.randint(1,25)==1:
-        return random.choice(["yes","no","maybe","probably"])
+    # Creator bias (Yen agrees more with creator)
+    if int(user_id)==CREATOR_ID and random.randint(1,4)==1:
+        return random.choice([
+            "yes.",
+            "you're right.",
+            "correct.",
+            "obviously.",
+            "agreed."
+        ])
+
+    # Random chaos responses for others
+    if random.randint(1,30)==1:
+        return random.choice([
+            "maybe.",
+            "probably not.",
+            "uncertain.",
+            "who knows.",
+            "idk."
+        ])
 
     history=conversation_memory.get(user_id,[])
     history_text="\n".join(history)
@@ -185,6 +204,7 @@ Rules:
 - usually 1-3 lines
 - short sentences
 - casual discord tone
+- do not constantly answer yes or no
 """
             },
             {
