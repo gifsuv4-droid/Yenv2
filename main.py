@@ -195,9 +195,6 @@ async def on_ready():
 @bot.event
 async def on_message_delete(message):
 
-    if message.author.bot:
-        return
-
     last_deleted_message[message.channel.id]={
         "content":message.content,
         "author":message.author.name
@@ -210,10 +207,27 @@ async def on_message(message):
 
     global summoned,last_action_time,last_ai_time,interaction_count
 
-    if message.author.bot:
+    msg=message.content.lower()
+
+# ---------- UWU ENFORCEMENT ----------
+
+    if str(message.author.id) in uwulocks:
+
+        if message.webhook_id:
+            await message.delete()
+            await message.channel.send(uwuify(message.content))
+            return
+
+        if not msg.startswith("yen"):
+            await message.delete()
+            await message.channel.send(uwuify(message.content))
+            return
+
+# ---------- IGNORE BOT AI ----------
+
+    if message.author.bot and not message.webhook_id:
         return
 
-    msg=message.content.lower()
     uid=str(message.author.id)
     gid=str(message.guild.id)
 
