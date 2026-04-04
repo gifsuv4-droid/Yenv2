@@ -182,20 +182,19 @@ async def webhook_send(channel,author,text=None,embed=None):
         allowed_mentions=SAFE_MENTIONS
     )
 
-# ---------- AI ----------
+# ---------- AI (IMPROVED) ----------
 
 def ask_ai(prompt,user_id):
 
-    if random.randint(1,4)!=1:
+    # occasional lazy response
+    if random.randint(1,5)==1:
         short=[
             "nah",
-            "ok",
-            "maybe",
-            "idk",
-            "sure",
-            "probably",
-            "nah fuck you",
-            "whatever"
+            "ok but why",
+            "maybe later",
+            "idk honestly",
+            "probably not",
+            "sounds cursed"
         ]
         return random.choice(short)
 
@@ -205,13 +204,35 @@ def ask_ai(prompt,user_id):
     completion=client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role":"system","content":f"You are Yen. Personality:{personality}. Replies must be extremely short."},
-            {"role":"user","content":f"{history_text}\n{prompt}"}
+            {
+                "role":"system",
+                "content":f"""
+You are Yen, a chaotic discord spirit.
+
+Personality: {personality}
+
+Rules:
+• talk like a discord user
+• sarcastic or chaotic
+• keep replies short
+• avoid single word replies
+• max 2 sentences
+"""
+            },
+            {
+                "role":"user",
+                "content":f"{history_text}\n{prompt}"
+            }
         ],
-        max_tokens=15
+        max_tokens=80
     )
 
-    return completion.choices[0].message.content.strip()
+    reply=completion.choices[0].message.content.strip()
+
+    if len(reply)<3:
+        reply="idk what to say"
+
+    return reply
 
 # ---------- READY ----------
 
