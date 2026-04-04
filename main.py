@@ -17,16 +17,10 @@ client=Groq(api_key=GROQ_KEY)
 intents=discord.Intents.all()
 bot=commands.Bot(command_prefix="",intents=intents)
 
-SAFE_MENTIONS=discord.AllowedMentions(
-    everyone=False,
-    roles=False,
-    users=True
-)
+SAFE_MENTIONS=discord.AllowedMentions(everyone=False,roles=False,users=True)
 
-SUMMON_TIMEOUT=300
 last_ai_time=0
 interaction_count=0
-
 personality="mysterious"
 
 memory_file="memory.json"
@@ -76,27 +70,42 @@ def uwuify(text):
     if not text:
         text="..."
 
-    text=text.replace("r","w")
-    text=text.replace("l","w")
-    text=text.replace("R","W")
-    text=text.replace("L","W")
+    text=text.replace("r","w").replace("l","w")
+    text=text.replace("R","W").replace("L","W")
 
-    faces=[" uwu"," owo"," >w<"," (・`ω´・)"," ^w^"]
+    faces=[" uwu"," owo"," >w<"," ^w^"," (・`ω´・)"]
 
     return text+random.choice(faces)
 
+def uwu_embed(embed):
+
+    new=discord.Embed(
+        title=uwuify(embed.title) if embed.title else None,
+        description=uwuify(embed.description) if embed.description else None,
+        color=embed.color
+    )
+
+    for field in embed.fields:
+        new.add_field(
+            name=uwuify(field.name),
+            value=uwuify(field.value),
+            inline=field.inline
+        )
+
+    if embed.footer:
+        new.set_footer(text=uwuify(embed.footer.text))
+
+    if embed.thumbnail:
+        new.set_thumbnail(url=embed.thumbnail.url)
+
+    if embed.image:
+        new.set_image(url=embed.image.url)
+
+    return new
+
 def evolve_personality():
     global personality
-
-    personalities=[
-        "mysterious",
-        "playful",
-        "chaotic",
-        "wise",
-        "sarcastic",
-        "sleepy"
-    ]
-
+    personalities=["mysterious","playful","chaotic","wise","sarcastic","sleepy"]
     personality=random.choice(personalities)
 
 def should_ai_respond(message,msg):
@@ -112,9 +121,9 @@ def should_ai_respond(message,msg):
 
     return False
 
-# ---------- WEBHOOK SEND (IMPERSONATION) ----------
+# ---------- WEBHOOK SEND ----------
 
-async def webhook_send(channel,author,text):
+async def webhook_send(channel,author,text=None,embed=None):
 
     webhook=None
 
@@ -129,6 +138,7 @@ async def webhook_send(channel,author,text):
 
     await webhook.send(
         text,
+        embed=embed,
         username=author.name,
         avatar_url=author.display_avatar.url,
         allowed_mentions=SAFE_MENTIONS
@@ -148,32 +158,35 @@ async def random_bot_argument(channel,guild):
 
     target=random.choice(bots)
 
-    lines=[
-        f"{target.name} do you even work",
-        f"{target.name} bro nobody uses you",
-        f"{target.name} you were coded in notepad",
-        f"{target.name} explain yourself",
-        f"{target.name} calm down"
+    insults=[
+        "do you even work",
+        "bro nobody uses you",
+        "you were coded in notepad",
+        "explain yourself",
+        "calm down"
     ]
 
-    await channel.send(random.choice(lines),allowed_mentions=SAFE_MENTIONS)
+    await channel.send(
+        f"{target.name} {random.choice(insults)}",
+        allowed_mentions=SAFE_MENTIONS
+    )
 
 # ---------- BOT CIVIL WAR ----------
 
-async def bot_civil_war(channel,guild,starter=None):
+async def bot_civil_war(channel,guild):
 
     bots=[m for m in guild.members if m.bot and m.id!=bot.user.id]
 
     if len(bots)<2:
         return
 
-    starter,target=random.sample(bots,2)
+    a,b=random.sample(bots,2)
 
     lines=[
-        f"{starter.name} just called {target.name} outdated",
-        f"{target.name} respond to that",
-        f"{starter.name} explain yourself",
-        f"{target.name} this is awkward",
+        f"{a.name} just called {b.name} outdated",
+        f"{b.name} respond to that",
+        f"{a.name} explain yourself",
+        f"{b.name} this is awkward",
         "i'm just watching"
     ]
 
@@ -186,13 +199,7 @@ async def bot_civil_war(channel,guild,starter=None):
 def ask_ai(prompt,user_id):
 
     if int(user_id)==CREATOR_ID and random.randint(1,4)==1:
-        return random.choice([
-            "yes.",
-            "correct.",
-            "agreed.",
-            "obviously.",
-            "you're right."
-        ])
+        return random.choice(["yes.","correct.","agreed.","obviously.","you're right."])
 
     history=conversation_memory.get(user_id,[])
     history_text="\n".join(history)
@@ -200,22 +207,8 @@ def ask_ai(prompt,user_id):
     completion=client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {
-                "role":"system",
-                "content":f"""
-You are Yen, a mystical discord spirit.
-
-Personality: {personality}
-
-Rules:
-- maximum 5 lines
-- casual discord tone
-"""
-            },
-            {
-                "role":"user",
-                "content":f"{history_text}\n{prompt}"
-            }
+            {"role":"system","content":f"You are Yen. Personality:{personality}. Max 5 lines."},
+            {"role":"user","content":f"{history_text}\n{prompt}"}
         ],
         max_tokens=70
     )
@@ -244,9 +237,6 @@ async def on_message_delete(message):
 @bot.event
 async def on_message_edit(before,after):
 
-    if after.author.id==bot.user.id:
-        return
-
     if str(after.author.id) not in uwulocks:
         return
 
@@ -255,9 +245,12 @@ async def on_message_edit(before,after):
     except:
         return
 
-    text=uwuify(after.content)
-
-    await webhook_send(after.channel,after.author,text)
+    if after.embeds:
+        embed=uwu_embed(after.embeds[0])
+        await webhook_send(after.channel,after.author,embed=embed)
+    else:
+        text=uwuify(after.content)
+        await webhook_send(after.channel,after.author,text)
 
 # ---------- MESSAGE ----------
 
@@ -280,9 +273,12 @@ async def on_message(message):
         except:
             pass
 
-        text=uwuify(message.content)
-
-        await webhook_send(message.channel,message.author,text)
+        if message.embeds:
+            embed=uwu_embed(message.embeds[0])
+            await webhook_send(message.channel,message.author,embed=embed)
+        else:
+            text=uwuify(message.content)
+            await webhook_send(message.channel,message.author,text)
 
         return
 
@@ -292,7 +288,6 @@ async def on_message(message):
 
         try:
             await message.delete()
-
             await message.channel.send(
                 "⚠ everyone ping blocked",
                 allowed_mentions=SAFE_MENTIONS
@@ -322,10 +317,7 @@ async def on_message(message):
 
     if msg=="yen help":
 
-        embed=discord.Embed(
-            title="🔮 Yen Commands",
-            color=0x9b59b6
-        )
+        embed=discord.Embed(title="🔮 Yen Commands",color=0x9b59b6)
 
         embed.add_field(name="Summon",value="hey yen / hi yen",inline=False)
         embed.add_field(name="Memory",value="yen remember <fact>\nyen memory",inline=False)
@@ -342,7 +334,6 @@ async def on_message(message):
     if msg.startswith("yen remember"):
 
         fact=message.content[12:].strip()
-
         gid=str(message.guild.id)
 
         memory_data.setdefault(gid,[])
@@ -356,19 +347,15 @@ async def on_message(message):
     if msg=="yen memory":
 
         gid=str(message.guild.id)
-
         facts=memory_data.get(gid,[])
 
         if not facts:
-            await message.channel.send("i remember nothing",allowed_mentions=SAFE_MENTIONS)
+            await message.channel.send("i remember nothing")
             return
 
         text="\n".join([f"• {x}" for x in facts[:10]])
 
-        await message.channel.send(
-            f"🧠 Memories\n\n{text}",
-            allowed_mentions=SAFE_MENTIONS
-        )
+        await message.channel.send(f"🧠 Memories\n\n{text}")
         return
 
 # ---------- SNIPE ----------
@@ -378,13 +365,10 @@ async def on_message(message):
         data=last_deleted_message.get(message.channel.id)
 
         if not data:
-            await message.channel.send("nothing to snipe",allowed_mentions=SAFE_MENTIONS)
+            await message.channel.send("nothing to snipe")
             return
 
-        await message.channel.send(
-            f"👻 {data['author']} deleted:\n{data['content']}",
-            allowed_mentions=SAFE_MENTIONS
-        )
+        await message.channel.send(f"👻 {data['author']} deleted:\n{data['content']}")
         return
 
 # ---------- MUTE ----------
@@ -410,13 +394,10 @@ async def on_message(message):
 
         await member.add_roles(mute_role)
 
-        await message.channel.send(
-            f"{member.mention} muted",
-            allowed_mentions=SAFE_MENTIONS
-        )
+        await message.channel.send(f"{member.mention} muted")
         return
 
-# ---------- UWULOCK COMMAND ----------
+# ---------- UWULOCK ----------
 
     if msg.startswith("yen uwulock"):
 
@@ -428,10 +409,7 @@ async def on_message(message):
         uwulocks[str(target.id)]=True
         save_json(uwulocks,uwu_file)
 
-        await message.channel.send(
-            f"{target.name} has been uwulocked",
-            allowed_mentions=SAFE_MENTIONS
-        )
+        await message.channel.send(f"{target.name} has been uwulocked")
         return
 
 # ---------- UNLOCK ----------
@@ -448,10 +426,7 @@ async def on_message(message):
 
         save_json(uwulocks,uwu_file)
 
-        await message.channel.send(
-            f"{target.name} is free",
-            allowed_mentions=SAFE_MENTIONS
-        )
+        await message.channel.send(f"{target.name} is free")
         return
 
 # ---------- AI ----------
@@ -462,7 +437,6 @@ async def on_message(message):
             return
 
         last_ai_time=time.time()
-
         interaction_count+=1
 
         if interaction_count%40==0:
