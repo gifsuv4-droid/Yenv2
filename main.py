@@ -190,7 +190,7 @@ Rules:
 async def on_ready():
     print("Yen Final Form Online")
 
-# ---------- SNIPE STORAGE ----------
+# ---------- DELETE TRACK ----------
 
 @bot.event
 async def on_message_delete(message):
@@ -221,13 +221,168 @@ async def on_message(message):
     detect_lore(msg,gid)
     learn_gossip(msg,message.author.name,gid)
 
-# ---------- WEBHOOK COMMAND ----------
+# ---------- SUMMON ----------
+
+    if "hey yen" in msg or "hi yen" in msg:
+
+        summoned=True
+        last_action_time=time.time()
+
+        await message.channel.send("🌙 Yen awakens.")
+        return
+
+# ---------- IDLE ----------
+
+    if summoned and time.time()-last_action_time>SUMMON_TIMEOUT:
+
+        summoned=False
+        await message.channel.send("🕯 Yen fades into silence.")
+        return
+
+# ---------- HELP ----------
+
+    if msg=="yen help":
+
+        embed=discord.Embed(
+            title="🔮 Yen Commands",
+            color=0x9b59b6
+        )
+
+        embed.add_field(name="Summon",value="hey yen / hi yen",inline=False)
+        embed.add_field(name="Profile",value="yen profile",inline=False)
+        embed.add_field(name="Memory",value="yen remember <fact>\nyen memory",inline=False)
+        embed.add_field(name="Moderation",value="yen mute @user",inline=False)
+        embed.add_field(name="Curses",value="yen uwulock @user / yen unlock @user",inline=False)
+        embed.add_field(name="Webhooks",value="yen create webhook <text>\nyen say @user <text>",inline=False)
+        embed.add_field(name="Utility",value="yen snipe",inline=False)
+
+        await message.channel.send(embed=embed)
+        return
+
+# ---------- PROFILE ----------
+
+    if msg=="yen profile":
+
+        profiles.setdefault(uid,{
+            "name":message.author.name,
+            "personality":detect_personality(msg),
+            "likes":[]
+        })
+
+        data=profiles[uid]
+
+        await message.channel.send(
+f"""👤 Profile
+
+Name: {data['name']}
+Personality: {data['personality']}
+"""
+        )
+        return
+
+# ---------- MEMORY ----------
+
+    if msg.startswith("yen remember"):
+
+        fact=message.content[12:].strip()
+
+        jokes_memory.setdefault(gid,[])
+        jokes_memory[gid].append(fact)
+
+        save_json(jokes_memory,jokes_file)
+
+        await message.channel.send("🧠 remembered.")
+        return
+
+    if msg=="yen memory" or "what do you remember" in msg:
+
+        server_facts=jokes_memory.get(gid,[])
+
+        if not server_facts:
+            await message.channel.send("i remember nothing yet.")
+            return
+
+        memory="\n".join([f"• {x}" for x in server_facts[:10]])
+
+        await message.channel.send(f"🧠 Memories\n\n{memory}")
+        return
+
+# ---------- SNIPE ----------
+
+    if msg=="yen snipe":
+
+        data=last_deleted_message.get(message.channel.id)
+
+        if not data:
+            await message.channel.send("nothing to snipe.")
+            return
+
+        await message.channel.send(
+f"👻 **{data['author']} deleted:**\n{data['content']}"
+        )
+        return
+
+# ---------- MUTE ----------
+
+    if msg.startswith("yen mute"):
+
+        if not message.author.guild_permissions.manage_messages:
+            return
+
+        if not message.mentions:
+            return
+
+        member=message.mentions[0]
+
+        mute_role=discord.utils.get(message.guild.roles,name="Muted")
+
+        if mute_role is None:
+
+            mute_role=await message.guild.create_role(name="Muted")
+
+            for channel in message.guild.channels:
+                await channel.set_permissions(mute_role,send_messages=False)
+
+        await member.add_roles(mute_role)
+
+        await message.channel.send(f"{member.mention} muted.")
+        return
+
+# ---------- UWULOCK ----------
+
+    if msg.startswith("yen uwulock"):
+
+        if not message.mentions:
+            return
+
+        target=message.mentions[0]
+
+        uwulocks[str(target.id)]=True
+        save_json(uwulocks,uwu_file)
+
+        await message.channel.send(f"{target.name} has been uwulocked.")
+        return
+
+# ---------- UNLOCK ----------
+
+    if msg.startswith("yen unlock"):
+
+        if not message.mentions:
+            return
+
+        target=message.mentions[0]
+
+        if str(target.id) in uwulocks:
+            del uwulocks[str(target.id)]
+
+        save_json(uwulocks,uwu_file)
+
+        await message.channel.send(f"{target.name} is free.")
+        return
+
+# ---------- WEBHOOK ----------
 
     if msg.startswith("yen create webhook"):
-
-        if not message.author.guild_permissions.manage_webhooks:
-            await message.channel.send("no permission.")
-            return
 
         text=message.content[18:].strip()
 
@@ -240,13 +395,9 @@ async def on_message(message):
         await message.delete()
         return
 
-# ---------- WEBHOOK IMPERSONATION ----------
+# ---------- IMPERSONATION ----------
 
     if msg.startswith("yen say"):
-
-        if not message.author.guild_permissions.manage_webhooks:
-            await message.channel.send("no permission.")
-            return
 
         if not message.mentions:
             return
@@ -268,22 +419,7 @@ async def on_message(message):
         await message.delete()
         return
 
-# ---------- SNIPE ----------
-
-    if msg=="yen snipe":
-
-        data=last_deleted_message.get(message.channel.id)
-
-        if not data:
-            await message.channel.send("nothing to snipe.")
-            return
-
-        await message.channel.send(
-f"👻 **{data['author']} deleted:**\n{data['content']}"
-        )
-        return
-
-# ---------- AI CHAT ----------
+# ---------- AI ----------
 
     if should_ai_respond(message,msg):
 
