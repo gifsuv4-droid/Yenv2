@@ -16,6 +16,12 @@ client=Groq(api_key=GROQ_KEY)
 intents=discord.Intents.all()
 bot=commands.Bot(command_prefix="",intents=intents)
 
+SAFE_MENTIONS = discord.AllowedMentions(
+    everyone=False,
+    roles=False,
+    users=True
+)
+
 SUMMON_TIMEOUT=300
 summoned=False
 last_action_time=0
@@ -107,42 +113,6 @@ def should_ai_respond(message,msg):
 
     return False
 
-# ---------- MEME LEARNING ----------
-
-def learn_joke(msg):
-
-    words=msg.split()
-
-    for w in words:
-        if len(w)>5:
-            server_jokes[w]=server_jokes.get(w,0)+1
-
-# ---------- LORE ----------
-
-def detect_lore(msg,gid):
-
-    lore_words=["legend","lore","remember this","historic","never forget"]
-
-    if any(x in msg for x in lore_words):
-
-        jokes_memory.setdefault(gid,[])
-        jokes_memory[gid].append(msg)
-
-        save_json(jokes_memory,jokes_file)
-
-# ---------- GOSSIP ----------
-
-def learn_gossip(msg,user,gid):
-
-    triggers=["i like","i love","i hate","i did","i ate"]
-
-    if any(x in msg for x in triggers):
-
-        gossip_memory.setdefault(gid,[])
-        gossip_memory[gid].append(f"{user} once said: {msg}")
-
-        save_json(gossip_memory,gossip_file)
-
 # ---------- AI ----------
 
 def ask_ai(prompt,user_id,gid):
@@ -170,6 +140,7 @@ Rules:
 - maximum 5 lines
 - usually 1-3 lines
 - casual discord tone
+- never use @everyone or @here
 """
             },
             {
@@ -209,19 +180,39 @@ async def on_message(message):
 
     msg=message.content.lower()
 
-# ---------- UWU ENFORCEMENT ----------
+# ---------- UWULOCK ENFORCEMENT ----------
 
     if str(message.author.id) in uwulocks:
 
-        if message.webhook_id:
+        if not msg.startswith("yen"):
+
             await message.delete()
-            await message.channel.send(uwuify(message.content))
+
+            await message.channel.send(
+                uwuify(message.content),
+                allowed_mentions=SAFE_MENTIONS
+            )
+
             return
 
-        if not msg.startswith("yen"):
-            await message.delete()
-            await message.channel.send(uwuify(message.content))
-            return
+# ---------- WEBHOOK UWU ----------
+
+    if message.webhook_id:
+
+        for uid in uwulocks:
+
+            member=message.guild.get_member(int(uid))
+
+            if member and member.name == message.author.name:
+
+                await message.delete()
+
+                await message.channel.send(
+                    uwuify(message.content),
+                    allowed_mentions=SAFE_MENTIONS
+                )
+
+                return
 
 # ---------- IGNORE BOT AI ----------
 
@@ -231,10 +222,6 @@ async def on_message(message):
     uid=str(message.author.id)
     gid=str(message.guild.id)
 
-    learn_joke(msg)
-    detect_lore(msg,gid)
-    learn_gossip(msg,message.author.name,gid)
-
 # ---------- SUMMON ----------
 
     if "hey yen" in msg or "hi yen" in msg:
@@ -242,7 +229,7 @@ async def on_message(message):
         summoned=True
         last_action_time=time.time()
 
-        await message.channel.send("🌙 Yen awakens.")
+        await message.channel.send("🌙 Yen awakens.",allowed_mentions=SAFE_MENTIONS)
         return
 
 # ---------- IDLE ----------
@@ -250,7 +237,7 @@ async def on_message(message):
     if summoned and time.time()-last_action_time>SUMMON_TIMEOUT:
 
         summoned=False
-        await message.channel.send("🕯 Yen fades into silence.")
+        await message.channel.send("🕯 Yen fades into silence.",allowed_mentions=SAFE_MENTIONS)
         return
 
 # ---------- HELP ----------
@@ -267,31 +254,9 @@ async def on_message(message):
         embed.add_field(name="Memory",value="yen remember <fact>\nyen memory",inline=False)
         embed.add_field(name="Moderation",value="yen mute @user",inline=False)
         embed.add_field(name="Curses",value="yen uwulock @user / yen unlock @user",inline=False)
-        embed.add_field(name="Webhooks",value="yen create webhook <text>\nyen say @user <text>",inline=False)
         embed.add_field(name="Utility",value="yen snipe",inline=False)
 
-        await message.channel.send(embed=embed)
-        return
-
-# ---------- PROFILE ----------
-
-    if msg=="yen profile":
-
-        profiles.setdefault(uid,{
-            "name":message.author.name,
-            "personality":detect_personality(msg),
-            "likes":[]
-        })
-
-        data=profiles[uid]
-
-        await message.channel.send(
-f"""👤 Profile
-
-Name: {data['name']}
-Personality: {data['personality']}
-"""
-        )
+        await message.channel.send(embed=embed,allowed_mentions=SAFE_MENTIONS)
         return
 
 # ---------- MEMORY ----------
@@ -305,7 +270,7 @@ Personality: {data['personality']}
 
         save_json(jokes_memory,jokes_file)
 
-        await message.channel.send("🧠 remembered.")
+        await message.channel.send("🧠 remembered.",allowed_mentions=SAFE_MENTIONS)
         return
 
     if msg=="yen memory" or "what do you remember" in msg:
@@ -313,12 +278,15 @@ Personality: {data['personality']}
         server_facts=jokes_memory.get(gid,[])
 
         if not server_facts:
-            await message.channel.send("i remember nothing yet.")
+            await message.channel.send("i remember nothing yet.",allowed_mentions=SAFE_MENTIONS)
             return
 
         memory="\n".join([f"• {x}" for x in server_facts[:10]])
 
-        await message.channel.send(f"🧠 Memories\n\n{memory}")
+        await message.channel.send(
+            f"🧠 Memories\n\n{memory}",
+            allowed_mentions=SAFE_MENTIONS
+        )
         return
 
 # ---------- SNIPE ----------
@@ -328,11 +296,12 @@ Personality: {data['personality']}
         data=last_deleted_message.get(message.channel.id)
 
         if not data:
-            await message.channel.send("nothing to snipe.")
+            await message.channel.send("nothing to snipe.",allowed_mentions=SAFE_MENTIONS)
             return
 
         await message.channel.send(
-f"👻 **{data['author']} deleted:**\n{data['content']}"
+f"👻 **{data['author']} deleted:**\n{data['content']}",
+allowed_mentions=SAFE_MENTIONS
         )
         return
 
@@ -359,7 +328,11 @@ f"👻 **{data['author']} deleted:**\n{data['content']}"
 
         await member.add_roles(mute_role)
 
-        await message.channel.send(f"{member.mention} muted.")
+        await message.channel.send(
+            f"{member.mention} muted.",
+            allowed_mentions=SAFE_MENTIONS
+        )
+
         return
 
 # ---------- UWULOCK ----------
@@ -374,7 +347,11 @@ f"👻 **{data['author']} deleted:**\n{data['content']}"
         uwulocks[str(target.id)]=True
         save_json(uwulocks,uwu_file)
 
-        await message.channel.send(f"{target.name} has been uwulocked.")
+        await message.channel.send(
+            f"{target.name} has been uwulocked.",
+            allowed_mentions=SAFE_MENTIONS
+        )
+
         return
 
 # ---------- UNLOCK ----------
@@ -391,46 +368,11 @@ f"👻 **{data['author']} deleted:**\n{data['content']}"
 
         save_json(uwulocks,uwu_file)
 
-        await message.channel.send(f"{target.name} is free.")
-        return
-
-# ---------- WEBHOOK ----------
-
-    if msg.startswith("yen create webhook"):
-
-        text=message.content[18:].strip()
-
-        webhook=await message.channel.create_webhook(name="Yen")
-
-        if str(message.author.id) in uwulocks:
-            text=uwuify(text)
-
-        await webhook.send(text,username=message.author.name)
-        await message.delete()
-        return
-
-# ---------- IMPERSONATION ----------
-
-    if msg.startswith("yen say"):
-
-        if not message.mentions:
-            return
-
-        target=message.mentions[0]
-        text=message.content.split(target.mention,1)[1].strip()
-
-        webhook=await message.channel.create_webhook(name=target.name)
-
-        if str(target.id) in uwulocks:
-            text=uwuify(text)
-
-        await webhook.send(
-            text,
-            username=target.name,
-            avatar_url=target.display_avatar.url
+        await message.channel.send(
+            f"{target.name} is free.",
+            allowed_mentions=SAFE_MENTIONS
         )
 
-        await message.delete()
         return
 
 # ---------- AI ----------
@@ -457,7 +399,7 @@ f"👻 **{data['author']} deleted:**\n{data['content']}"
         if str(message.author.id) in uwulocks:
             reply=uwuify(reply)
 
-        await message.channel.send(reply)
+        await message.channel.send(reply,allowed_mentions=SAFE_MENTIONS)
 
     await bot.process_commands(message)
 
