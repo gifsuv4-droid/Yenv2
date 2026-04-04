@@ -68,12 +68,14 @@ def keep_alive():
 # ---------- HELP COMMAND ----------
 
 HELP_TEXT="""
-YEN COMMANDS
+**YEN COMMANDS**
 
+**Core**
 yen help
 yen chaos
 yen chaos level <1-5>
 
+**Fun**
 yen roast @user
 yen judge
 yen rate
@@ -82,11 +84,12 @@ yen coinflip
 yen roll
 yen prophecy
 
+**Settings**
 yen personality <type>
 
+**Utility**
 yen uwulock @user
 yen unlock @user
-
 yen snipe
 """
 
@@ -295,7 +298,16 @@ async def on_message(message):
 # HELP
 
     if msg=="yen help":
-        await message.channel.send(HELP_TEXT)
+
+        embed=discord.Embed(
+            title="📜 Yen Help",
+            description=HELP_TEXT,
+            color=discord.Color.purple()
+        )
+
+        embed.set_footer(text="Yen • chaotic spirit")
+
+        await message.channel.send(embed=embed)
         return
 
 # CHAOS
