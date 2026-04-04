@@ -23,6 +23,7 @@ last_ai_time=0
 interaction_count=0
 personality="lazy chaotic spirit"
 chaos_mode=True
+chaos_level=3
 
 memory_file="memory.json"
 uwu_file="uwu.json"
@@ -63,6 +64,31 @@ def run():
 
 def keep_alive():
     Thread(target=run).start()
+
+# ---------- HELP COMMAND ----------
+
+HELP_TEXT="""
+YEN COMMANDS
+
+yen help
+yen chaos
+yen chaos level <1-5>
+
+yen roast @user
+yen judge
+yen rate
+yen choose option | option | option
+yen coinflip
+yen roll
+yen prophecy
+
+yen personality <type>
+
+yen uwulock @user
+yen unlock @user
+
+yen snipe
+"""
 
 # ---------- HELPERS ----------
 
@@ -163,7 +189,9 @@ async def random_bot_argument(channel,guild):
     if len(bots)<1:
         return
 
-    if random.randint(1,200)!=1:
+    chance=200-(chaos_level*30)
+
+    if random.randint(1,chance)!=1:
         return
 
     target=random.choice(bots)
@@ -221,16 +249,13 @@ def ask_ai(prompt,user_id):
         ]
         return random.choice(short)
 
-    if int(user_id)==CREATOR_ID and random.randint(1,3)==1:
-        return random.choice(["yes","correct","agreed","obviously"])
-
     history=conversation_memory.get(user_id,[])
     history_text="\n".join(history)
 
     completion=client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role":"system","content":f"You are Yen. Personality:{personality}. Replies must be extremely short. 1-5 words."},
+            {"role":"system","content":f"You are Yen. Personality:{personality}. Replies must be extremely short."},
             {"role":"user","content":f"{history_text}\n{prompt}"}
         ],
         max_tokens=15
@@ -260,55 +285,20 @@ async def on_message_delete(message):
 @bot.event
 async def on_message(message):
 
-    global last_ai_time,interaction_count,chaos_mode,personality
+    global last_ai_time,interaction_count,chaos_mode,personality,chaos_level
 
     if message.author.id==bot.user.id:
         return
 
     msg=message.content.lower()
 
-# ---------- ANTI EVERYONE ----------
+# HELP
 
-    if "@everyone" in message.content or "@here" in message.content:
-
-        try:
-            await message.delete()
-            await message.channel.send(
-                "⚠ everyone ping blocked",
-                allowed_mentions=SAFE_MENTIONS
-            )
-        except:
-            pass
-
+    if msg=="yen help":
+        await message.channel.send(HELP_TEXT)
         return
 
-# ---------- TRUE UWULOCK ----------
-
-    if str(message.author.id) in uwulocks:
-
-        try:
-            await message.delete()
-        except:
-            pass
-
-        if message.embeds:
-            embed=uwu_embed(message.embeds[0])
-            await webhook_send(message.channel,message.author,embed=embed)
-        else:
-            text=uwuify(message.content)
-            await webhook_send(message.channel,message.author,text)
-
-        return
-
-# ---------- RANDOM CHAOS ----------
-
-    if message.guild:
-        await random_bot_argument(message.channel,message.guild)
-
-        if chaos_mode and random.randint(1,300)==1:
-            await bot_civil_war(message.channel,message.guild)
-
-# ---------- CHAOS COMMAND ----------
+# CHAOS
 
     if msg=="yen chaos":
 
@@ -317,6 +307,25 @@ async def on_message(message):
         await message.channel.send(
             f"chaos mode: {'on' if chaos_mode else 'off'}"
         )
+        return
+
+# CHAOS LEVEL
+
+    if msg.startswith("yen chaos level"):
+
+        try:
+            level=int(msg.split(" ")[3])
+
+            if level<1 or level>5:
+                return
+
+            chaos_level=level
+
+            await message.channel.send(f"chaos level set to {level}")
+
+        except:
+            pass
+
         return
 
 # ---------- FUN COMMANDS ----------
@@ -371,7 +380,7 @@ async def on_message(message):
         await message.channel.send("🔮 "+random.choice(prophecies))
         return
 
-# ---------- PERSONALITY ----------
+# PERSONALITY
 
     if msg.startswith("yen personality"):
 
@@ -383,7 +392,7 @@ async def on_message(message):
 
         return
 
-# ---------- SNIPE ----------
+# SNIPE
 
     if msg=="yen snipe":
 
@@ -393,10 +402,10 @@ async def on_message(message):
             await message.channel.send("nothing to snipe")
             return
 
-        await message.channel.send(f"👻 {data['author']} deleted:\n{data['content']}")
+        await message.channel.send(f"{data['author']} deleted:\n{data['content']}")
         return
 
-# ---------- UWULOCK ----------
+# UWULOCK
 
     if msg.startswith("yen uwulock"):
 
@@ -411,7 +420,7 @@ async def on_message(message):
 
         return
 
-# ---------- UNLOCK ----------
+# UNLOCK
 
     if msg.startswith("yen unlock"):
 
