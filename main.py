@@ -255,9 +255,9 @@ async def on_message(message):
 
     msg=message.content.lower()
 
-# TRUE UWULOCK
+# TRUE UWULOCK (FIXED)
 
-    if message.author.bot:
+    if message.author.bot and message.author.id != bot.user.id:
 
         if str(message.author.id) in uwulocks:
 
