@@ -182,21 +182,9 @@ async def webhook_send(channel,author,text=None,embed=None):
         allowed_mentions=SAFE_MENTIONS
     )
 
-# ---------- AI (IMPROVED) ----------
+# ---------- AI ----------
 
 def ask_ai(prompt,user_id):
-
-    # occasional lazy response
-    if random.randint(1,5)==1:
-        short=[
-            "nah",
-            "ok but why",
-            "maybe later",
-            "idk honestly",
-            "probably not",
-            "sounds cursed"
-        ]
-        return random.choice(short)
 
     history=conversation_memory.get(user_id,[])
     history_text="\n".join(history)
@@ -215,8 +203,8 @@ Rules:
 • talk like a discord user
 • sarcastic or chaotic
 • keep replies short
-• avoid single word replies
 • max 2 sentences
+• sometimes roast people
 """
             },
             {
@@ -230,7 +218,12 @@ Rules:
     reply=completion.choices[0].message.content.strip()
 
     if len(reply)<3:
-        reply="idk what to say"
+        reply=random.choice([
+            "that sounds illegal",
+            "skill issue detected",
+            "this conversation worries me",
+            "i refuse to process that"
+        ])
 
     return reply
 
@@ -361,10 +354,11 @@ async def on_message(message):
         a,b=random.sample(bots,2)
 
         lines=[
-            f"{a.name} just called {b.name} outdated",
-            f"{b.name} respond to that",
+            f"{a.name} just leaked {b.name}'s code",
+            f"{b.name} that true?",
             f"{a.name} explain yourself",
-            "this is awkward"
+            f"{b.name} is typing...",
+            "this bot drama is wild"
         ]
 
         for line in lines:
@@ -520,7 +514,7 @@ async def on_message(message):
 
 # AI
 
-    if "yen" in msg or random.randint(1,60)==1:
+    if ("yen" in msg and not msg.startswith("yen ")) or random.randint(1,60)==1:
 
         if time.time()-last_ai_time<6:
             return
@@ -536,11 +530,18 @@ async def on_message(message):
 
         conversation_memory[uid]=conversation_memory[uid][-MEMORY_LIMIT:]
 
+        if chaos_mode:
+            if random.randint(1,10)<=chaos_level:
+                chaos_lines=[
+                    "this server is cursed",
+                    "someone here is lying",
+                    "i blame the wifi",
+                    "this feels illegal"
+                ]
+                await message.channel.send(random.choice(chaos_lines))
+
         if str(message.author.id) in uwulocks:
             reply=uwuify(reply)
-
-        if message.author.id==CREATOR_ID:
-            reply="yes"
 
         await message.channel.send(reply,allowed_mentions=SAFE_MENTIONS)
 
