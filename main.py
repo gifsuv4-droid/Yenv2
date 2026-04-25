@@ -9,32 +9,29 @@ from groq import Groq
 from flask import Flask
 from threading import Thread
 
-TOKEN=os.getenv("TOKEN")
-GROQ_KEY=os.getenv("GROQ_KEY")
+TOKEN = os.getenv("TOKEN")
+GROQ_KEY = os.getenv("GROQ_KEY")
 
-client=Groq(api_key=GROQ_KEY)
+client = Groq(api_key=GROQ_KEY)
 
-intents=discord.Intents.all()
-bot=commands.Bot(command_prefix="",intents=intents)
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="", intents=intents)
 
-SAFE_MENTIONS=discord.AllowedMentions(everyone=False,roles=False,users=True)
+SAFE_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
-last_ai_time=0
-interaction_count=0
-personality="lazy chaotic spirit"
-chaos_mode=True
-chaos_level=3
+last_ai_time = 0
+personality = "chaotic sarcastic discord gremlin"
+chaos_mode = True
+chaos_level = 3
 
-memory_file="memory.json"
-uwu_file="uwu.json"
+memory_file = "memory.json"
+uwu_file = "uwu.json"
+gossip_file = "gossip.json"
 
-conversation_memory={}
-last_deleted_message={}
+conversation_memory = {}
+last_deleted_message = {}
 
-MEMORY_LIMIT=6
-CREATOR_ID=1383111113016872980
-
-# ---------- FILE HELPERS ----------
+MEMORY_LIMIT = 8
 
 def load_json(file):
     if os.path.exists(file):
@@ -42,508 +39,207 @@ def load_json(file):
             return json.load(f)
     return {}
 
-def save_json(data,file):
-    with open(file,"w") as f:
-        json.dump(data,f,indent=2)
+def save_json(data, file):
+    with open(file, "w") as f:
+        json.dump(data, f, indent=2)
 
-uwulocks=load_json(uwu_file)
-memories=load_json(memory_file)
+uwulocks = load_json(uwu_file)
+memories = load_json(memory_file)
+gossip = load_json(gossip_file)
 
 # ---------- KEEP ALIVE ----------
 
-app=Flask("")
+app = Flask("")
 
 @app.route("/")
 def home():
-    return "Yen Online"
+    return "Yen AI Online"
 
 def run():
-    port=int(os.environ.get("PORT",8080))
-    app.run(host="0.0.0.0",port=port)
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
 
 def keep_alive():
     Thread(target=run).start()
 
-# ---------- HELPERS ----------
+# ---------- UWU ----------
 
 def uwuify(text):
-
-    if not text:
-        text="..."
-
-    text=text.replace("r","w").replace("l","w")
-    text=text.replace("R","W").replace("L","W")
-
-    faces=[" uwu"," owo"," >w<"," ^w^"," (・`ω´・)"]
-
-    return text+random.choice(faces)
-
-def uwu_embed(embed):
-
-    new=discord.Embed(
-        title=uwuify(embed.title) if embed.title else None,
-        description=uwuify(embed.description) if embed.description else None,
-        color=embed.color
-    )
-
-    for field in embed.fields:
-        new.add_field(
-            name=uwuify(field.name),
-            value=uwuify(field.value),
-            inline=field.inline
-        )
-
-    return new
-
-# ---------- HELP EMBED ----------
-
-def help_embed():
-
-    embed=discord.Embed(
-        title="Yen Commands",
-        color=discord.Color.purple()
-    )
-
-    embed.add_field(
-        name="Core",
-        value="""
-yen help
-yen chaos
-yen chaos level <1-5>
-yen personality <type>
-""",
-        inline=False
-    )
-
-    embed.add_field(
-        name="Fun",
-        value="""
-yen roast @user
-yen judge
-yen rate
-yen choose option | option | option
-yen coinflip
-yen roll
-yen prophecy
-""",
-        inline=False
-    )
-
-    embed.add_field(
-        name="Chaos",
-        value="""
-yen start war @bot
-yen civilwar
-""",
-        inline=False
-    )
-
-    embed.add_field(
-        name="UwU",
-        value="""
-yen uwulock @user
-yen unlock @user
-""",
-        inline=False
-    )
-
-    embed.add_field(
-        name="Utility",
-        value="""
-yen snipe
-yen remember <fact>
-yen memories
-""",
-        inline=False
-    )
-
-    return embed
-
-# ---------- WEBHOOK ----------
-
-async def webhook_send(channel,author,text=None,embed=None):
-
-    webhook=None
-
-    webhooks=await channel.webhooks()
-
-    for w in webhooks:
-        if w.name=="yenhook":
-            webhook=w
-
-    if webhook is None:
-        webhook=await channel.create_webhook(name="yenhook")
-
-    await webhook.send(
-        text,
-        embed=embed,
-        username=author.name,
-        avatar_url=author.display_avatar.url,
-        allowed_mentions=SAFE_MENTIONS
-    )
+    text = text.replace("r","w").replace("l","w")
+    faces = [" uwu"," owo"," >w<"," ^w^"]
+    return text + random.choice(faces)
 
 # ---------- AI ----------
 
-def ask_ai(prompt,user_id):
+def ask_ai(prompt, user_id, reply_context=None):
 
-    history=conversation_memory.get(user_id,[])
-    history_text="\n".join(history)
+    history = conversation_memory.get(user_id, [])
+    history_text = "\n".join(history)
 
-    completion=client.chat.completions.create(
+    random_gossip = random.choice(gossip.get("logs", [""])) if gossip.get("logs") else ""
+
+    context_text = ""
+    if reply_context:
+        context_text = f"\nMessage being replied to:\n{reply_context}\n"
+
+    completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {
-                "role":"system",
-                "content":f"""
-You are Yen, a chaotic discord spirit.
+                "role": "system",
+                "content": f"""
+You are Yen, a smart chaotic Discord AI.
 
-Personality: {personality}
+Personality:
+{personality}
 
 Rules:
-• talk like a discord user
-• sarcastic or chaotic
-• keep replies short
-• max 2 sentences
-• sometimes roast people
+- Talk like a real Discord user
+- Be sarcastic, funny, or chill
+- Use short replies normally
+- Use longer replies ONLY when needed
+- Never be unnecessarily long
+- React to reply context if present
 """
             },
             {
-                "role":"user",
-                "content":f"{history_text}\n{prompt}"
+                "role": "user",
+                "content": f"""
+Conversation:
+{history_text}
+
+{context_text}
+
+User: {prompt}
+"""
             }
         ],
-        max_tokens=80
+        max_tokens=100
     )
 
-    reply=completion.choices[0].message.content.strip()
+    reply = completion.choices[0].message.content.strip()
 
-    if len(reply)<3:
-        reply=random.choice([
+    if len(reply) < 3:
+        reply = random.choice([
             "that sounds illegal",
-            "skill issue detected",
-            "this conversation worries me",
-            "i refuse to process that"
+            "skill issue",
+            "i refuse to respond to that"
         ])
 
     return reply
 
-# ---------- READY ----------
+# ---------- EVENTS ----------
 
 @bot.event
 async def on_ready():
-    print("Yen Online")
-
-# ---------- DELETE TRACK ----------
+    print("Yen AI Online")
 
 @bot.event
 async def on_message_delete(message):
-
-    last_deleted_message[message.channel.id]={
-        "content":message.content,
-        "author":message.author.name
+    last_deleted_message[message.channel.id] = {
+        "content": message.content,
+        "author": message.author.name
     }
-
-# ---------- MESSAGE ----------
 
 @bot.event
 async def on_message(message):
 
-    global last_ai_time,interaction_count,chaos_mode,chaos_level,personality
+    global last_ai_time, chaos_mode, chaos_level, personality
 
-    if message.author.id==bot.user.id:
+    if message.author.bot:
         return
 
-    msg=message.content.lower()
+    msg = message.content.lower()
 
-# TRUE UWULOCK (FIXED)
+# ---------- COMMANDS ----------
 
-    if message.author.bot and message.author.id != bot.user.id:
-
-        if str(message.author.id) in uwulocks:
-
-            if message.embeds:
-
-                embed=uwu_embed(message.embeds[0])
-
-                try:
-                    await message.delete()
-                except:
-                    pass
-
-                await webhook_send(message.channel,message.author,embed=embed)
-
-            elif message.content:
-
-                try:
-                    await message.delete()
-                except:
-                    pass
-
-                await webhook_send(
-                    message.channel,
-                    message.author,
-                    uwuify(message.content)
-                )
-
-            return
-
-# HELP
-
-    if msg=="yen help":
-        await message.channel.send(embed=help_embed())
+    if msg == "yen help":
+        await message.channel.send("just talk to me or use chaos/memory/uwu")
         return
 
-# CHAOS
-
-    if msg=="yen chaos":
-
-        chaos_mode=not chaos_mode
-
-        await message.channel.send(
-            f"chaos mode: {'on' if chaos_mode else 'off'}"
-        )
+    if msg == "yen chaos":
+        chaos_mode = not chaos_mode
+        await message.channel.send(f"chaos: {'on' if chaos_mode else 'off'}")
         return
 
-# CHAOS LEVEL
+    if msg.startswith("yen personality"):
+        personality = msg.replace("yen personality", "").strip()
+        await message.channel.send(f"new personality: {personality}")
+        return
 
-    if msg.startswith("yen chaos level"):
+# ---------- GOSSIP LEARNING ----------
 
+    if len(message.content.split()) > 4:
+        gossip.setdefault("logs", []).append(message.content)
+        gossip["logs"] = gossip["logs"][-50:]
+        save_json(gossip, gossip_file)
+
+# ---------- AI TRIGGER (UPDATED) ----------
+
+    triggers = ["hey yen", "yo yen", "hi yen", "hello yen"]
+
+    should_reply = (
+        msg.startswith("yen")
+        or any(t in msg for t in triggers)
+        or random.randint(1, 50) == 1
+    )
+
+    if not should_reply:
+        return
+
+    if time.time() - last_ai_time < 4:
+        return
+
+    last_ai_time = time.time()
+
+# ---------- REPLY CONTEXT ----------
+
+    reply_context = None
+    if message.reference:
         try:
-            level=int(msg.split(" ")[3])
-
-            if 1<=level<=5:
-
-                chaos_level=level
-                await message.channel.send(f"chaos level {level}")
-
+            replied = await message.channel.fetch_message(message.reference.message_id)
+            reply_context = f"{replied.author.name}: {replied.content}"
         except:
             pass
 
-        return
+# ---------- CLEAN PROMPT ----------
 
-# START WAR
+    clean_prompt = message.content
 
-    if msg.startswith("yen start war"):
+    if clean_prompt.lower().startswith("yen"):
+        clean_prompt = clean_prompt[3:].strip()
 
-        if message.mentions:
+    for t in triggers:
+        if t in clean_prompt.lower():
+            clean_prompt = clean_prompt.lower().replace(t, "").strip()
 
-            target=message.mentions[0]
+# ---------- AI ----------
 
-            lines=[
-                f"{target.name} explain yourself",
-                "bro nobody uses you",
-                "your code outdated",
-                "skill issue"
-            ]
+    uid = str(message.author.id)
 
-            for line in lines:
-                await message.channel.send(line)
-                await asyncio.sleep(1)
+    reply = ask_ai(clean_prompt, uid, reply_context)
 
-        return
+    conversation_memory.setdefault(uid, []).append(clean_prompt)
+    conversation_memory[uid].append(reply)
+    conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
 
-# CIVIL WAR
+# ---------- CHAOS ----------
 
-    if msg=="yen civilwar":
+    if chaos_mode and random.randint(1,10) <= chaos_level:
+        await message.channel.send(random.choice([
+            "this server feels cursed",
+            "someone here is lying",
+            "im watching all of you"
+        ]))
 
-        bots=[m for m in message.guild.members if m.bot and m.id!=bot.user.id]
+# ---------- UWU LOCK ----------
 
-        if len(bots)<2:
-            return
+    if str(message.author.id) in uwulocks:
+        reply = uwuify(reply)
 
-        a,b=random.sample(bots,2)
+    await message.channel.send(reply, allowed_mentions=SAFE_MENTIONS)
 
-        lines=[
-            f"{a.name} just leaked {b.name}'s code",
-            f"{b.name} that true?",
-            f"{a.name} explain yourself",
-            f"{b.name} is typing...",
-            "this bot drama is wild"
-        ]
-
-        for line in lines:
-            await message.channel.send(line)
-            await asyncio.sleep(1.5)
-
-        return
-
-# FUN COMMANDS
-
-    if msg.startswith("yen roast"):
-
-        if message.mentions:
-
-            user=message.mentions[0]
-
-            roasts=[
-                "built like a microwave",
-                "npc energy",
-                "wifi brain",
-                "skill issue"
-            ]
-
-            await message.channel.send(
-                f"{user.mention} {random.choice(roasts)}",
-                allowed_mentions=SAFE_MENTIONS
-            )
-
-        return
-
-    if msg.startswith("yen judge"):
-        await message.channel.send(random.choice(["cringe","based","npc"]))
-        return
-
-    if msg.startswith("yen rate"):
-        await message.channel.send(f"{random.randint(1,10)}/10")
-        return
-
-    if msg.startswith("yen choose"):
-
-        parts=message.content.split("|")
-
-        if len(parts)>1:
-            await message.channel.send(random.choice(parts[1:]).strip())
-
-        return
-
-    if msg=="yen coinflip":
-        await message.channel.send(random.choice(["heads","tails"]))
-        return
-
-    if msg=="yen roll":
-        await message.channel.send(f"🎲 {random.randint(1,6)}")
-        return
-
-    if msg=="yen prophecy":
-
-        prophecies=[
-            "chaos approaches",
-            "wifi will betray you",
-            "destiny says maybe"
-        ]
-
-        await message.channel.send("🔮 "+random.choice(prophecies))
-        return
-
-# PERSONALITY
-
-    if msg.startswith("yen personality"):
-
-        new=msg.replace("yen personality","").strip()
-
-        if new:
-            personality=new
-            await message.channel.send(f"personality -> {new}")
-
-        return
-
-# SNIPE
-
-    if msg=="yen snipe":
-
-        data=last_deleted_message.get(message.channel.id)
-
-        if not data:
-            await message.channel.send("nothing to snipe")
-            return
-
-        await message.channel.send(
-            f"{data['author']} deleted:\n{data['content']}"
-        )
-
-        return
-
-# UWULOCK
-
-    if msg.startswith("yen uwulock"):
-
-        if message.mentions:
-
-            target=message.mentions[0]
-
-            uwulocks[str(target.id)]=True
-            save_json(uwulocks,uwu_file)
-
-            await message.channel.send(f"{target.name} uwulocked")
-
-        return
-
-# UNLOCK
-
-    if msg.startswith("yen unlock"):
-
-        if message.mentions:
-
-            target=message.mentions[0]
-
-            if str(target.id) in uwulocks:
-                del uwulocks[str(target.id)]
-
-            save_json(uwulocks,uwu_file)
-
-            await message.channel.send(f"{target.name} freed")
-
-        return
-
-# MEMORY
-
-    if msg.startswith("yen remember"):
-
-        fact=message.content.replace("yen remember","").strip()
-
-        if fact:
-
-            memories.setdefault("facts",[]).append(fact)
-            save_json(memories,memory_file)
-
-            await message.channel.send("noted")
-
-        return
-
-    if msg=="yen memories":
-
-        facts=memories.get("facts",[])
-
-        if not facts:
-            await message.channel.send("i remember nothing")
-            return
-
-        await message.channel.send("\n".join(facts[-10:]))
-
-        return
-
-# AI
-
-    if ("yen" in msg and not msg.startswith("yen ")) or random.randint(1,60)==1:
-
-        if time.time()-last_ai_time<6:
-            return
-
-        last_ai_time=time.time()
-
-        uid=str(message.author.id)
-
-        reply=ask_ai(message.content,uid)
-
-        conversation_memory.setdefault(uid,[]).append(message.content)
-        conversation_memory[uid].append(reply)
-
-        conversation_memory[uid]=conversation_memory[uid][-MEMORY_LIMIT:]
-
-        if chaos_mode:
-            if random.randint(1,10)<=chaos_level:
-                chaos_lines=[
-                    "this server is cursed",
-                    "someone here is lying",
-                    "i blame the wifi",
-                    "this feels illegal"
-                ]
-                await message.channel.send(random.choice(chaos_lines))
-
-        if str(message.author.id) in uwulocks:
-            reply=uwuify(reply)
-
-        await message.channel.send(reply,allowed_mentions=SAFE_MENTIONS)
+# ---------- START ----------
 
 keep_alive()
 bot.run(TOKEN)
