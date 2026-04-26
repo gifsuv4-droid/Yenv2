@@ -4,6 +4,7 @@ import os
 import json
 import time
 import random
+import asyncio
 from groq import Groq
 
 TOKEN = os.getenv("TOKEN")
@@ -15,8 +16,6 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="", intents=intents)
 
 SAFE_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)
-
-# ---------- CONFIG ----------
 
 CREATOR_ID = 1383111113016872980
 
@@ -31,12 +30,12 @@ slime_file = "slimed.json"
 
 conversation_memory = {}
 user_cooldowns = {}
-processed_messages = set()
+processing_messages = {}
 
 MEMORY_LIMIT = 8
 COOLDOWN_TIME = 4
 
-# ---------- FILE HELPERS ----------
+# ---------- FILE ----------
 
 def load_json(file):
     if os.path.exists(file):
@@ -55,38 +54,32 @@ slimed_users = load_json(slime_file)
 # ---------- UWU ----------
 
 def uwuify(text):
-    text = text.replace("r","w").replace("l","w")
-    return text + random.choice([" uwu"," owo"," >w<"])
+    return text.replace("r","w").replace("l","w") + random.choice([" uwu"," owo"," >w<"])
 
 # ---------- INTENT ----------
 
 def detect_intent(text):
     text = text.lower()
-
-    serious = ["how","why","explain","what is","help","guide"]
-    joke = ["lol","roast","joke","funny","rate"]
-
-    if any(k in text for k in serious):
+    if any(k in text for k in ["how","why","explain","help","what is"]):
         return "serious"
-    if any(k in text for k in joke):
+    if any(k in text for k in ["roast","lol","funny","joke"]):
         return "joke"
     return "casual"
 
 # ---------- AI ----------
 
-def ask_ai(prompt, user_id, reply_context=None):
+def ask_ai(prompt, user_id):
 
     history = conversation_memory.get(user_id, [])
     history_text = "\n".join(history[-MEMORY_LIMIT:])
 
     intent = detect_intent(prompt)
 
-    if intent == "serious":
-        tone = "Be helpful and concise."
-    elif intent == "joke":
-        tone = "Be sarcastic and funny."
-    else:
-        tone = "Be casual."
+    tone = {
+        "serious": "Be helpful and concise.",
+        "joke": "Be sarcastic and funny.",
+        "casual": "Be natural."
+    }[intent]
 
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -94,19 +87,16 @@ def ask_ai(prompt, user_id, reply_context=None):
             {
                 "role": "system",
                 "content": f"""
-You are Yen, a chaotic Discord AI.
+You are Yen, a Discord AI.
 
 Personality: {personality}
 
 Rules:
-- Talk like a Discord user
-- Keep replies short (1–2 sentences)
-- Help if it's a real question
-- Avoid long paragraphs
-- Don't repeat yourself
+- 1-2 sentences only
+- no repeating yourself
+- answer properly if serious
 
-Tone:
-{tone}
+Tone: {tone}
 """
             },
             {
@@ -119,18 +109,8 @@ Tone:
 
     reply = completion.choices[0].message.content.strip()
 
-    # fallback
     if len(reply) < 3:
-        reply = random.choice([
-            "that sounds illegal",
-            "skill issue",
-            "no comment"
-        ])
-
-    # HARD LIMIT
-    words = reply.split()
-    if len(words) > 25:
-        reply = " ".join(words[:25]) + "..."
+        reply = "skill issue"
 
     return reply
 
@@ -146,21 +126,19 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # ---------- DUPLICATE FIX ----------
-    if message.id in processed_messages:
-        return
+    now = time.time()
 
-    processed_messages.add(message.id)
-
-    if len(processed_messages) > 1000:
-        processed_messages.clear()
+    # HARD duplicate lock
+    if message.id in processing_messages:
+        if now - processing_messages[message.id] < 6:
+            return
+    processing_messages[message.id] = now
 
     msg = message.content.lower()
 
 # ---------- SLIME ----------
 
     if msg.startswith("yen slime"):
-
         if message.author.id != CREATOR_ID:
             return
 
@@ -192,25 +170,22 @@ async def on_message(message):
         except:
             pass
 
-        await message.channel.send(f"{target.mention} got slimed 🟢")
+        await message.channel.send(f"{target.mention} got slimed")
         return
 
 # ---------- RESTORE ----------
 
     if msg.startswith("yen restore"):
-
         if message.author.id != CREATOR_ID:
             return
 
         if not message.mentions:
-            await message.channel.send("who?")
             return
 
         target = message.mentions[0]
         saved = slimed_users.get(str(target.id))
 
         if not saved:
-            await message.channel.send("no saved data")
             return
 
         roles = [message.guild.get_role(r) for r in saved["roles"] if message.guild.get_role(r)]
@@ -241,7 +216,7 @@ async def on_message(message):
 
 # ---------- TRIGGER ----------
 
-    triggers = ["hey yen","yo yen","hi yen","hello yen"]
+    triggers = ["hey yen","hi yen","yo yen","hello yen"]
 
     if not (
         msg.startswith("yen")
@@ -253,14 +228,13 @@ async def on_message(message):
 # ---------- COOLDOWN ----------
 
     uid = str(message.author.id)
-    now = time.time()
 
     if uid in user_cooldowns and now - user_cooldowns[uid] < COOLDOWN_TIME:
         return
 
     user_cooldowns[uid] = now
 
-# ---------- CLEAN INPUT ----------
+# ---------- CLEAN ----------
 
     clean = message.content
     if clean.lower().startswith("yen"):
@@ -274,13 +248,13 @@ async def on_message(message):
     conversation_memory[uid].append(reply)
     conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
 
-# ---------- CHAOS (FIXED) ----------
+# ---------- CHAOS (merged, not extra send) ----------
 
     if chaos_mode and random.randint(1,10) <= chaos_level:
         reply = random.choice([
             "this server is cursed",
-            "something feels off",
-            "i'm watching"
+            "i'm watching",
+            "something feels off"
         ])
 
 # ---------- UWU ----------
@@ -288,9 +262,18 @@ async def on_message(message):
     if str(message.author.id) in uwulocks:
         reply = uwuify(reply)
 
-# ---------- SINGLE SEND ----------
+# ---------- ANTI DUPLICATE INSTANCE ----------
 
-    await message.channel.send(reply, allowed_mentions=SAFE_MENTIONS)
+    await asyncio.sleep(random.uniform(0.4, 1.2))
+
+    async for m in message.channel.history(limit=5):
+        if m.author == bot.user and m.reference:
+            if m.reference.message_id == message.id:
+                return
+
+# ---------- SEND ----------
+
+    await message.reply(reply, allowed_mentions=SAFE_MENTIONS)
 
 # ---------- START ----------
 
