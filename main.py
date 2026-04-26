@@ -19,7 +19,10 @@ bot = commands.Bot(command_prefix="", intents=intents)
 
 SAFE_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
-last_ai_time = 0
+# ---------- CONFIG ----------
+
+CREATOR_ID = 1383111113016872980
+
 personality = "chaotic sarcastic discord gremlin"
 chaos_mode = True
 chaos_level = 3
@@ -27,11 +30,16 @@ chaos_level = 3
 memory_file = "memory.json"
 uwu_file = "uwu.json"
 gossip_file = "gossip.json"
+slime_file = "slimed.json"
 
 conversation_memory = {}
 last_deleted_message = {}
+user_cooldowns = {}
 
 MEMORY_LIMIT = 8
+COOLDOWN_TIME = 4
+
+# ---------- FILE HELPERS ----------
 
 def load_json(file):
     if os.path.exists(file):
@@ -46,6 +54,7 @@ def save_json(data, file):
 uwulocks = load_json(uwu_file)
 memories = load_json(memory_file)
 gossip = load_json(gossip_file)
+slimed_users = load_json(slime_file)
 
 # ---------- KEEP ALIVE ----------
 
@@ -66,8 +75,7 @@ def keep_alive():
 
 def uwuify(text):
     text = text.replace("r","w").replace("l","w")
-    faces = [" uwu"," owo"," >w<"," ^w^"]
-    return text + random.choice(faces)
+    return text + random.choice([" uwu"," owo"," >w<"])
 
 # ---------- AI ----------
 
@@ -80,7 +88,7 @@ def ask_ai(prompt, user_id, reply_context=None):
 
     context_text = ""
     if reply_context:
-        context_text = f"\nMessage being replied to:\n{reply_context}\n"
+        context_text = f"\nReplying to:\n{reply_context}\n"
 
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -88,30 +96,24 @@ def ask_ai(prompt, user_id, reply_context=None):
             {
                 "role": "system",
                 "content": f"""
-You are Yen, a smart chaotic Discord AI.
+You are Yen, a chaotic Discord AI.
 
-Personality:
-{personality}
+Personality: {personality}
 
 Rules:
-- Talk like a real Discord user
-- Be sarcastic, funny, or chill
-- Use short replies normally
-- Use longer replies ONLY when needed
-- Never be unnecessarily long
-- React to reply context if present
+- Talk like a Discord user
+- Mostly short replies
+- Longer replies only when needed
+- Can roast users
+- Use gossip occasionally
+
+Known gossip:
+{random_gossip}
 """
             },
             {
                 "role": "user",
-                "content": f"""
-Conversation:
-{history_text}
-
-{context_text}
-
-User: {prompt}
-"""
+                "content": f"{history_text}\n{context_text}\nUser: {prompt}"
             }
         ],
         max_tokens=100
@@ -132,7 +134,7 @@ User: {prompt}
 
 @bot.event
 async def on_ready():
-    print("Yen AI Online")
+    print("Yen Online")
 
 @bot.event
 async def on_message_delete(message):
@@ -144,27 +146,96 @@ async def on_message_delete(message):
 @bot.event
 async def on_message(message):
 
-    global last_ai_time, chaos_mode, chaos_level, personality
+    global chaos_mode, chaos_level, personality
 
     if message.author.bot:
         return
 
     msg = message.content.lower()
 
-# ---------- COMMANDS ----------
+# ---------- SLIME ----------
 
-    if msg == "yen help":
-        await message.channel.send("just talk to me or use chaos/memory/uwu")
+    if msg.startswith("yen slime"):
+
+        if message.author.id != CREATOR_ID:
+            return
+
+        if not message.mentions:
+            await message.channel.send("who?")
+            return
+
+        target = message.mentions[0]
+
+        role = discord.utils.get(message.guild.roles, name="SLIMED")
+        if role is None:
+            role = await message.guild.create_role(name="SLIMED")
+
+        slimed_users[str(target.id)] = {
+            "roles": [r.id for r in target.roles if r != message.guild.default_role],
+            "nickname": target.nick
+        }
+        save_json(slimed_users, slime_file)
+
+        removable = [r for r in target.roles if r != message.guild.default_role and r < message.guild.me.top_role]
+
+        await target.remove_roles(*removable)
+        await target.add_roles(role)
+
+        try:
+            await target.edit(nick="*SLIMED*")
+        except:
+            pass
+
+        await message.channel.send(f"{target.mention} got slimed 🟢")
         return
 
-    if msg == "yen chaos":
-        chaos_mode = not chaos_mode
-        await message.channel.send(f"chaos: {'on' if chaos_mode else 'off'}")
-        return
+# ---------- RESTORE ----------
 
-    if msg.startswith("yen personality"):
-        personality = msg.replace("yen personality", "").strip()
-        await message.channel.send(f"new personality: {personality}")
+    if msg.startswith("yen restore"):
+
+        if message.author.id != CREATOR_ID:
+            return
+
+        if not message.mentions:
+            await message.channel.send("who?")
+            return
+
+        target = message.mentions[0]
+
+        saved = slimed_users.get(str(target.id))
+
+        if not saved:
+            await message.channel.send("no data for this user")
+            return
+
+        roles_to_restore = [
+            message.guild.get_role(rid)
+            for rid in saved["roles"]
+            if message.guild.get_role(rid)
+        ]
+
+        try:
+            await target.add_roles(*roles_to_restore)
+        except:
+            await message.channel.send("couldn't restore roles")
+            return
+
+        role = discord.utils.get(message.guild.roles, name="SLIMED")
+        if role:
+            try:
+                await target.remove_roles(role)
+            except:
+                pass
+
+        try:
+            await target.edit(nick=saved["nickname"])
+        except:
+            pass
+
+        del slimed_users[str(target.id)]
+        save_json(slimed_users, slime_file)
+
+        await message.channel.send(f"{target.mention} restored ✅")
         return
 
 # ---------- GOSSIP LEARNING ----------
@@ -174,25 +245,34 @@ async def on_message(message):
         gossip["logs"] = gossip["logs"][-50:]
         save_json(gossip, gossip_file)
 
-# ---------- AI TRIGGER (UPDATED) ----------
+# ---------- AI TRIGGER (FIXED) ----------
 
     triggers = ["hey yen", "yo yen", "hi yen", "hello yen"]
 
-    should_reply = (
-        msg.startswith("yen")
-        or any(t in msg for t in triggers)
-        or random.randint(1, 50) == 1
-    )
+    should_reply = False
+
+    if msg.startswith("yen"):
+        should_reply = True
+    elif any(msg.startswith(t) for t in triggers):
+        should_reply = True
+    elif random.randint(1, 50) == 1:
+        should_reply = True
 
     if not should_reply:
         return
 
-    if time.time() - last_ai_time < 4:
-        return
+# ---------- PER USER COOLDOWN ----------
 
-    last_ai_time = time.time()
+    uid = str(message.author.id)
+    now = time.time()
 
-# ---------- REPLY CONTEXT ----------
+    if uid in user_cooldowns:
+        if now - user_cooldowns[uid] < COOLDOWN_TIME:
+            return
+
+    user_cooldowns[uid] = now
+
+# ---------- CONTEXT ----------
 
     reply_context = None
     if message.reference:
@@ -202,24 +282,19 @@ async def on_message(message):
         except:
             pass
 
-# ---------- CLEAN PROMPT ----------
+    clean = message.content
 
-    clean_prompt = message.content
-
-    if clean_prompt.lower().startswith("yen"):
-        clean_prompt = clean_prompt[3:].strip()
+    if clean.lower().startswith("yen"):
+        clean = clean[3:].strip()
 
     for t in triggers:
-        if t in clean_prompt.lower():
-            clean_prompt = clean_prompt.lower().replace(t, "").strip()
+        clean = clean.lower().replace(t, "").strip()
 
 # ---------- AI ----------
 
-    uid = str(message.author.id)
+    reply = ask_ai(clean, uid, reply_context)
 
-    reply = ask_ai(clean_prompt, uid, reply_context)
-
-    conversation_memory.setdefault(uid, []).append(clean_prompt)
+    conversation_memory.setdefault(uid, []).append(clean)
     conversation_memory[uid].append(reply)
     conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
 
@@ -227,9 +302,9 @@ async def on_message(message):
 
     if chaos_mode and random.randint(1,10) <= chaos_level:
         await message.channel.send(random.choice([
-            "this server feels cursed",
-            "someone here is lying",
-            "im watching all of you"
+            "this server is cursed",
+            "something feels off",
+            "i'm watching"
         ]))
 
 # ---------- UWU LOCK ----------
