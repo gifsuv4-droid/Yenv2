@@ -22,13 +22,11 @@ SAFE_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 CREATOR_ID = 1383111113016872980
 IMMUNE_USERS = {CREATOR_ID, 1464487262082302095}
 
-# 🔒 LEADER SYSTEM
-LOCK_CHANNEL_ID = 1446191246828634223  # ← PUT YOUR CHANNEL ID HERE
+LOCK_CHANNEL_ID = 1446191246828634223
 IS_LEADER = False
 
 # ---------- CONFIG ----------
 personality = "chaotic sarcastic discord gremlin"
-
 MEMORY_LIMIT = 8
 COOLDOWN_TIME = 4
 
@@ -131,7 +129,7 @@ def ask_ai(prompt, uid):
         print(e)
         return "brain lag"
 
-# ---------- EVENTS ----------
+# ---------- READY ----------
 @bot.event
 async def on_ready():
     global IS_LEADER
@@ -145,27 +143,27 @@ async def on_ready():
 
     async for msg in channel.history(limit=5):
         if msg.author == bot.user and msg.content == "LOCK":
-            print("Another instance active → going silent")
             IS_LEADER = False
+            print("Another instance active → silent")
             return
 
     await channel.send("LOCK")
     IS_LEADER = True
-    print("This instance is leader")
+    print("Leader instance active")
 
+# ---------- MESSAGE ----------
 @bot.event
 async def on_message(message):
 
     if message.author.bot:
         return
 
-    # 🔒 LEADER CHECK
     if not IS_LEADER:
         return
 
     now = time.time()
 
-# ---------- GLOBAL LOCK ----------
+    # GLOBAL LOCK
     if message.id in message_locks:
         if now - message_locks[message.id] < 5:
             return
@@ -178,7 +176,7 @@ async def on_message(message):
 
     msg = message.content.lower()
 
-# ---------- FILTER ----------
+    # FILTER
     if message.author.id not in IMMUNE_USERS:
         if any(w in msg.replace(" ", "") for w in ["nigger","sex","rape","raper","retard","motherfucker"]):
             try:
@@ -188,90 +186,65 @@ async def on_message(message):
             await safe_send(message.channel, f"*I'll pretend i didn't see anything {message.author.mention}*")
             return
 
-# ---------- HELP ----------
+    # ---------- COMMANDS ----------
+
+    # HELP
     if msg == "yen commands":
         if not message.author.guild_permissions.administrator:
             return
 
         cmds = [
-            "yen kick @user","yen ban @user","yen timeout @user <min>","yen untimeout @user","yen purge <n>",
-            "yen slowmode <sec>","yen nick @user <name>","yen warn @user",
-            "yen slime @user","yen restore @user",
-            "yen <text>","hey yen"
+            "yen kick @user","yen ban @user","yen timeout @user <min>","yen untimeout @user",
+            "yen purge <n>","yen slowmode <sec>","yen nick @user <name>","yen warn @user",
+            "yen slime @user","yen restore @user","yen <text>","hey yen"
         ]
 
         view = HelpView(message.author, cmds)
         await message.channel.send(embed=view.get_embed(), view=view)
         return
 
-# ---------- SLIME ----------
-    if msg.startswith("yen slime") and message.author.id == CREATOR_ID:
+    # PURGE
+    if msg.startswith("yen purge"):
+        if not message.author.guild_permissions.manage_messages:
+            return
+        try:
+            n = int(msg.split()[2])
+        except:
+            await safe_send(message.channel, "invalid number")
+            return
+
+        deleted = await message.channel.purge(limit=n + 1)
+        await safe_send(message.channel, f"deleted {len(deleted)-1} messages")
+        return
+
+    # NICK
+    if msg.startswith("yen nick"):
+        if not message.author.guild_permissions.manage_nicknames:
+            return
         if not message.mentions:
             return
 
-        t = message.mentions[0]
+        target = message.mentions[0]
 
-        role = discord.utils.get(message.guild.roles, name="SLIMED")
-        if role is None:
-            role = await message.guild.create_role(name="SLIMED")
-
-        slimed_users[str(t.id)] = {
-            "roles": [r.id for r in t.roles if r != message.guild.default_role],
-            "nickname": t.nick
-        }
-        save_json(slimed_users, slime_file)
-
-        removable = [r for r in t.roles if r != message.guild.default_role and r < message.guild.me.top_role]
-
-        if removable:
-            await t.remove_roles(*removable)
-
-        await t.add_roles(role)
-
-        try:
-            await t.edit(nick="*SLIMED*")
-        except:
-            pass
-
-        await safe_send(message.channel, f"{t.mention} got slimed")
-        return
-
-# ---------- RESTORE ----------
-    if msg.startswith("yen restore") and message.author.id == CREATOR_ID:
-        if not message.mentions:
+        if not can_moderate(message.author, target, message.guild):
             return
 
-        t = message.mentions[0]
-        data = slimed_users.get(str(t.id))
-
-        if not data:
+        try:
+            name = message.content.split(" ", 3)[3]
+        except:
             return
 
-        roles = [message.guild.get_role(r) for r in data["roles"] if message.guild.get_role(r)]
-
-        if roles:
-            await t.add_roles(*roles)
-
-        role = discord.utils.get(message.guild.roles, name="SLIMED")
-        if role:
-            await t.remove_roles(role)
-
         try:
-            await t.edit(nick=data["nickname"])
+            await target.edit(nick=name)
+            await safe_send(message.channel, "nick changed")
         except:
-            pass
-
-        del slimed_users[str(t.id)]
-        save_json(slimed_users, slime_file)
-
-        await safe_send(message.channel, f"{t.mention} restored")
+            await safe_send(message.channel, "failed (role hierarchy?)")
         return
 
-# ---------- AI TRIGGER ----------
+    # ---------- AI ----------
     if not (msg.startswith("yen") or msg.startswith("hey yen") or random.randint(1,50) == 1):
         return
 
-# ---------- COOLDOWN ----------
     uid = str(message.author.id)
 
     if uid in user_cooldowns:
@@ -280,9 +253,7 @@ async def on_message(message):
 
     user_cooldowns[uid] = now
 
-# ---------- AI ----------
     clean = message.content.replace("yen", "", 1).strip()
-
     reply = ask_ai(clean, uid)
 
     conversation_memory.setdefault(uid, []).append(clean)
@@ -290,7 +261,6 @@ async def on_message(message):
     conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
 
     await asyncio.sleep(random.uniform(0.4, 1.2))
-
     await safe_send(message.channel, reply, ref=message)
 
 # ---------- RUN ----------
