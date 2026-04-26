@@ -4,10 +4,7 @@ import os
 import json
 import time
 import random
-import asyncio
 from groq import Groq
-from flask import Flask
-from threading import Thread
 
 TOKEN = os.getenv("TOKEN")
 GROQ_KEY = os.getenv("GROQ_KEY")
@@ -56,21 +53,6 @@ memories = load_json(memory_file)
 gossip = load_json(gossip_file)
 slimed_users = load_json(slime_file)
 
-# ---------- KEEP ALIVE ----------
-
-app = Flask("")
-
-@app.route("/")
-def home():
-    return "Yen AI Online"
-
-def run():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
-
-def keep_alive():
-    Thread(target=run).start()
-
 # ---------- UWU ----------
 
 def uwuify(text):
@@ -82,13 +64,11 @@ def uwuify(text):
 def ask_ai(prompt, user_id, reply_context=None):
 
     history = conversation_memory.get(user_id, [])
-    history_text = "\n".join(history)
+    history_text = "\n".join(history[-MEMORY_LIMIT:])
 
     random_gossip = random.choice(gossip.get("logs", [""])) if gossip.get("logs") else ""
 
-    context_text = ""
-    if reply_context:
-        context_text = f"\nReplying to:\n{reply_context}\n"
+    context_text = f"\nReplying to:\n{reply_context}\n" if reply_context else ""
 
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -104,8 +84,8 @@ Rules:
 - Talk like a Discord user
 - Mostly short replies
 - Longer replies only when needed
-- Can roast users
-- Use gossip occasionally
+- Be witty or sarcastic
+- Occasionally reference gossip naturally
 
 Known gossip:
 {random_gossip}
@@ -166,25 +146,35 @@ async def on_message(message):
 
         target = message.mentions[0]
 
-        role = discord.utils.get(message.guild.roles, name="SLIMED")
-        if role is None:
-            role = await message.guild.create_role(name="SLIMED")
+        # find role (case-insensitive)
+        role = discord.utils.find(lambda r: r.name.lower() == "slimed", message.guild.roles)
 
+        if role is None:
+            role = await message.guild.create_role(name="SLIMED", reason="Slime system")
+
+        # save roles + nickname
         slimed_users[str(target.id)] = {
             "roles": [r.id for r in target.roles if r != message.guild.default_role],
             "nickname": target.nick
         }
         save_json(slimed_users, slime_file)
 
-        removable = [r for r in target.roles if r != message.guild.default_role and r < message.guild.me.top_role]
+        removable = [
+            r for r in target.roles
+            if r != message.guild.default_role and r < message.guild.me.top_role
+        ]
 
-        await target.remove_roles(*removable)
+        if removable:
+            await target.remove_roles(*removable)
+        else:
+            await message.channel.send("⚠️ couldn't remove some roles (hierarchy issue)")
+
         await target.add_roles(role)
 
         try:
             await target.edit(nick="*SLIMED*")
         except:
-            pass
+            await message.channel.send("⚠️ couldn't change nickname")
 
         await message.channel.send(f"{target.mention} got slimed 🟢")
         return
@@ -201,11 +191,10 @@ async def on_message(message):
             return
 
         target = message.mentions[0]
-
         saved = slimed_users.get(str(target.id))
 
         if not saved:
-            await message.channel.send("no data for this user")
+            await message.channel.send("no saved data")
             return
 
         roles_to_restore = [
@@ -214,23 +203,17 @@ async def on_message(message):
             if message.guild.get_role(rid)
         ]
 
-        try:
+        if roles_to_restore:
             await target.add_roles(*roles_to_restore)
-        except:
-            await message.channel.send("couldn't restore roles")
-            return
 
-        role = discord.utils.get(message.guild.roles, name="SLIMED")
+        role = discord.utils.find(lambda r: r.name.lower() == "slimed", message.guild.roles)
         if role:
-            try:
-                await target.remove_roles(role)
-            except:
-                pass
+            await target.remove_roles(role)
 
         try:
             await target.edit(nick=saved["nickname"])
         except:
-            pass
+            await message.channel.send("⚠️ couldn't restore nickname")
 
         del slimed_users[str(target.id)]
         save_json(slimed_users, slime_file)
@@ -238,14 +221,18 @@ async def on_message(message):
         await message.channel.send(f"{target.mention} restored ✅")
         return
 
-# ---------- GOSSIP LEARNING ----------
+# ---------- GOSSIP FILTER ----------
 
-    if len(message.content.split()) > 4:
+    if (
+        len(message.content.split()) > 4
+        and not msg.startswith("yen")
+        and not message.author.bot
+    ):
         gossip.setdefault("logs", []).append(message.content)
         gossip["logs"] = gossip["logs"][-50:]
         save_json(gossip, gossip_file)
 
-# ---------- AI TRIGGER (FIXED) ----------
+# ---------- AI TRIGGER ----------
 
     triggers = ["hey yen", "yo yen", "hi yen", "hello yen"]
 
@@ -261,7 +248,7 @@ async def on_message(message):
     if not should_reply:
         return
 
-# ---------- PER USER COOLDOWN ----------
+# ---------- PER USER COOLDOWN (AUTO CLEAN) ----------
 
     uid = str(message.author.id)
     now = time.time()
@@ -271,6 +258,11 @@ async def on_message(message):
             return
 
     user_cooldowns[uid] = now
+
+    # clean old cooldowns
+    for u in list(user_cooldowns.keys()):
+        if now - user_cooldowns[u] > 60:
+            del user_cooldowns[u]
 
 # ---------- CONTEXT ----------
 
@@ -291,6 +283,8 @@ async def on_message(message):
         clean = clean.lower().replace(t, "").strip()
 
 # ---------- AI ----------
+
+    uid = str(message.author.id)
 
     reply = ask_ai(clean, uid, reply_context)
 
@@ -316,5 +310,4 @@ async def on_message(message):
 
 # ---------- START ----------
 
-keep_alive()
 bot.run(TOKEN)
