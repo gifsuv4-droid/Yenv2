@@ -8,9 +8,12 @@ from groq import Groq
 TOKEN = os.getenv("TOKEN")
 GROQ_KEY = os.getenv("GROQ_KEY")
 
+if not TOKEN or not GROQ_KEY:
+    raise ValueError("Missing TOKEN or GROQ_KEY")
+
 client = Groq(api_key=GROQ_KEY)
 
-# ---------- BOT SETUP ----------
+# ---------- BOT ----------
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="", intents=intents)
 
@@ -19,19 +22,22 @@ SAFE_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 CREATOR_ID = 1383111113016872980
 IMMUNE_USERS = {CREATOR_ID, 1464487262082302095}
 
+# 🔒 LEADER SYSTEM
+LOCK_CHANNEL_ID = 1446191246828634223  # ← PUT YOUR CHANNEL ID HERE
+IS_LEADER = False
+
 # ---------- CONFIG ----------
 personality = "chaotic sarcastic discord gremlin"
 
 MEMORY_LIMIT = 8
 COOLDOWN_TIME = 4
 
-memory_file = "memory.json"
 slime_file = "slimed.json"
 warn_file = "warns.json"
 
 conversation_memory = {}
 user_cooldowns = {}
-processing_messages = {}
+message_locks = {}
 
 # ---------- FILE ----------
 def load_json(f):
@@ -47,7 +53,7 @@ def save_json(d, f):
 slimed_users = load_json(slime_file)
 warns = load_json(warn_file)
 
-# ---------- SAFE SEND (ANTI DOUBLE CORE) ----------
+# ---------- SAFE SEND ----------
 async def safe_send(channel, content=None, embed=None, ref=None):
     async for m in channel.history(limit=6):
         if m.author == bot.user:
@@ -105,20 +111,47 @@ class HelpView(discord.ui.View):
 # ---------- AI ----------
 def ask_ai(prompt, uid):
     history = conversation_memory.get(uid, [])
-    completion = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": f"Short replies. Personality: {personality}"},
-            {"role": "user", "content": "\n".join(history[-MEMORY_LIMIT:]) + "\n" + prompt}
-        ],
-        max_tokens=60
-    )
-    return completion.choices[0].message.content.strip() or "skill issue"
+
+    messages = [{"role": "system", "content": f"Short replies. Personality: {personality}"}]
+
+    for i, msg in enumerate(history[-MEMORY_LIMIT:]):
+        role = "user" if i % 2 == 0 else "assistant"
+        messages.append({"role": role, "content": msg})
+
+    messages.append({"role": "user", "content": prompt})
+
+    try:
+        completion = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=messages,
+            max_tokens=60
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception as e:
+        print(e)
+        return "brain lag"
 
 # ---------- EVENTS ----------
 @bot.event
 async def on_ready():
-    print("Yen Online")
+    global IS_LEADER
+
+    print(f"{bot.user} starting...")
+
+    channel = bot.get_channel(LOCK_CHANNEL_ID)
+    if not channel:
+        print("Lock channel not found")
+        return
+
+    async for msg in channel.history(limit=5):
+        if msg.author == bot.user and msg.content == "LOCK":
+            print("Another instance active → going silent")
+            IS_LEADER = False
+            return
+
+    await channel.send("LOCK")
+    IS_LEADER = True
+    print("This instance is leader")
 
 @bot.event
 async def on_message(message):
@@ -126,14 +159,24 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    msg = message.content.lower()
+    # 🔒 LEADER CHECK
+    if not IS_LEADER:
+        return
+
     now = time.time()
 
 # ---------- GLOBAL LOCK ----------
-    if message.id in processing_messages:
-        if now - processing_messages[message.id] < 6:
+    if message.id in message_locks:
+        if now - message_locks[message.id] < 5:
             return
-    processing_messages[message.id] = now
+
+    message_locks[message.id] = now
+
+    for k in list(message_locks.keys()):
+        if now - message_locks[k] > 10:
+            del message_locks[k]
+
+    msg = message.content.lower()
 
 # ---------- FILTER ----------
     if message.author.id not in IMMUNE_USERS:
@@ -158,8 +201,7 @@ async def on_message(message):
         ]
 
         view = HelpView(message.author, cmds)
-        sent = await safe_send(message.channel, embed=view.get_embed())
-        await message.channel.send(view=view)
+        await message.channel.send(embed=view.get_embed(), view=view)
         return
 
 # ---------- SLIME ----------
@@ -223,117 +265,6 @@ async def on_message(message):
         save_json(slimed_users, slime_file)
 
         await safe_send(message.channel, f"{t.mention} restored")
-        return
-
-# ---------- MOD ----------
-    if msg.startswith("yen kick"):
-        if not message.author.guild_permissions.kick_members:
-            return
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-        if not can_moderate(message.author, t, message.guild):
-            return
-
-        await t.kick()
-        await safe_send(message.channel, "kicked")
-        return
-
-    if msg.startswith("yen ban"):
-        if not message.author.guild_permissions.ban_members:
-            return
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-        if not can_moderate(message.author, t, message.guild):
-            return
-
-        await t.ban()
-        await safe_send(message.channel, "banned")
-        return
-
-    if msg.startswith("yen timeout"):
-        if not message.author.guild_permissions.moderate_members:
-            return
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-
-        try:
-            mins = int(msg.split()[3])
-        except:
-            return
-
-        await t.timeout(timedelta(minutes=mins))
-        await safe_send(message.channel, "timed out")
-        return
-
-    if msg.startswith("yen untimeout"):
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-        await t.timeout(None)
-        await safe_send(message.channel, "untimeout")
-        return
-
-    if msg.startswith("yen purge"):
-        if not message.author.guild_permissions.manage_messages:
-            return
-
-        try:
-            n = int(msg.split()[2])
-        except:
-            return
-
-        await message.channel.purge(limit=n + 1)
-        return
-
-    if msg.startswith("yen slowmode"):
-        if not message.author.guild_permissions.manage_channels:
-            return
-
-        try:
-            s = int(msg.split()[2])
-        except:
-            return
-
-        await message.channel.edit(slowmode_delay=s)
-        await safe_send(message.channel, "slowmode set")
-        return
-
-    if msg.startswith("yen nick"):
-        if not message.author.guild_permissions.manage_nicknames:
-            return
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-
-        if not can_moderate(message.author, t, message.guild):
-            return
-
-        try:
-            name = message.content.split(" ", 3)[3]
-        except:
-            return
-
-        await t.edit(nick=name)
-        await safe_send(message.channel, "nick changed")
-        return
-
-    if msg.startswith("yen warn"):
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-        warns.setdefault(str(t.id), []).append("warn")
-        save_json(warns, warn_file)
-
-        await safe_send(message.channel, "warned")
         return
 
 # ---------- AI TRIGGER ----------
