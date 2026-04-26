@@ -82,10 +82,12 @@ Personality: {personality}
 
 Rules:
 - Talk like a Discord user
-- Mostly short replies
-- Longer replies only when needed
-- Be witty or sarcastic
-- Occasionally reference gossip naturally
+- Keep replies very short (1 sentence preferred)
+- Only use 2 sentences if needed
+- Rarely go above 20 words
+- Be sharp, sarcastic, and natural
+- Avoid long explanations unless asked
+- Occasionally reference gossip
 
 Known gossip:
 {random_gossip}
@@ -96,17 +98,23 @@ Known gossip:
                 "content": f"{history_text}\n{context_text}\nUser: {prompt}"
             }
         ],
-        max_tokens=100
+        max_tokens=60
     )
 
     reply = completion.choices[0].message.content.strip()
 
+    # fallback
     if len(reply) < 3:
         reply = random.choice([
             "that sounds illegal",
             "skill issue",
             "i refuse to respond to that"
         ])
+
+    # HARD LIMIT (prevents long messages)
+    words = reply.split()
+    if len(words) > 25:
+        reply = " ".join(words[:25]) + "..."
 
     return reply
 
@@ -146,13 +154,11 @@ async def on_message(message):
 
         target = message.mentions[0]
 
-        # find role (case-insensitive)
         role = discord.utils.find(lambda r: r.name.lower() == "slimed", message.guild.roles)
 
         if role is None:
             role = await message.guild.create_role(name="SLIMED", reason="Slime system")
 
-        # save roles + nickname
         slimed_users[str(target.id)] = {
             "roles": [r.id for r in target.roles if r != message.guild.default_role],
             "nickname": target.nick
@@ -248,7 +254,7 @@ async def on_message(message):
     if not should_reply:
         return
 
-# ---------- PER USER COOLDOWN (AUTO CLEAN) ----------
+# ---------- COOLDOWN ----------
 
     uid = str(message.author.id)
     now = time.time()
@@ -259,7 +265,6 @@ async def on_message(message):
 
     user_cooldowns[uid] = now
 
-    # clean old cooldowns
     for u in list(user_cooldowns.keys()):
         if now - user_cooldowns[u] > 60:
             del user_cooldowns[u]
@@ -283,8 +288,6 @@ async def on_message(message):
         clean = clean.lower().replace(t, "").strip()
 
 # ---------- AI ----------
-
-    uid = str(message.author.id)
 
     reply = ask_ai(clean, uid, reply_context)
 
