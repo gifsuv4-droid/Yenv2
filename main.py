@@ -30,7 +30,6 @@ gossip_file = "gossip.json"
 slime_file = "slimed.json"
 
 conversation_memory = {}
-last_deleted_message = {}
 user_cooldowns = {}
 processed_messages = set()
 
@@ -50,7 +49,6 @@ def save_json(data, file):
         json.dump(data, f, indent=2)
 
 uwulocks = load_json(uwu_file)
-memories = load_json(memory_file)
 gossip = load_json(gossip_file)
 slimed_users = load_json(slime_file)
 
@@ -65,12 +63,12 @@ def uwuify(text):
 def detect_intent(text):
     text = text.lower()
 
-    serious_keywords = ["how","why","explain","what is","help","teach","guide"]
-    joke_keywords = ["lol","roast","joke","funny","sus","rate"]
+    serious = ["how","why","explain","what is","help","guide"]
+    joke = ["lol","roast","joke","funny","rate"]
 
-    if any(k in text for k in serious_keywords):
+    if any(k in text for k in serious):
         return "serious"
-    if any(k in text for k in joke_keywords):
+    if any(k in text for k in joke):
         return "joke"
     return "casual"
 
@@ -80,10 +78,6 @@ def ask_ai(prompt, user_id, reply_context=None):
 
     history = conversation_memory.get(user_id, [])
     history_text = "\n".join(history[-MEMORY_LIMIT:])
-
-    random_gossip = random.choice(gossip.get("logs", [""])) if gossip.get("logs") else ""
-
-    context_text = f"\nReplying to:\n{reply_context}\n" if reply_context else ""
 
     intent = detect_intent(prompt)
 
@@ -108,19 +102,16 @@ Rules:
 - Talk like a Discord user
 - Keep replies short (1–2 sentences)
 - Help if it's a real question
-- Don't be overly dismissive
 - Avoid long paragraphs
+- Don't repeat yourself
 
 Tone:
 {tone}
-
-Gossip:
-{random_gossip}
 """
             },
             {
                 "role": "user",
-                "content": f"{history_text}\n{context_text}\nUser: {prompt}"
+                "content": f"{history_text}\nUser: {prompt}"
             }
         ],
         max_tokens=60
@@ -128,6 +119,7 @@ Gossip:
 
     reply = completion.choices[0].message.content.strip()
 
+    # fallback
     if len(reply) < 3:
         reply = random.choice([
             "that sounds illegal",
@@ -135,6 +127,7 @@ Gossip:
             "no comment"
         ])
 
+    # HARD LIMIT
     words = reply.split()
     if len(words) > 25:
         reply = " ".join(words[:25]) + "..."
@@ -149,8 +142,6 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-
-    global chaos_mode, chaos_level
 
     if message.author.bot:
         return
@@ -252,16 +243,11 @@ async def on_message(message):
 
     triggers = ["hey yen","yo yen","hi yen","hello yen"]
 
-    should_reply = False
-
-    if msg.startswith("yen"):
-        should_reply = True
-    elif any(msg.startswith(t) for t in triggers):
-        should_reply = True
-    elif random.randint(1,50) == 1:
-        should_reply = True
-
-    if not should_reply:
+    if not (
+        msg.startswith("yen")
+        or any(msg.startswith(t) for t in triggers)
+        or random.randint(1,50) == 1
+    ):
         return
 
 # ---------- COOLDOWN ----------
@@ -274,15 +260,7 @@ async def on_message(message):
 
     user_cooldowns[uid] = now
 
-# ---------- CONTEXT ----------
-
-    reply_context = None
-    if message.reference:
-        try:
-            replied = await message.channel.fetch_message(message.reference.message_id)
-            reply_context = f"{replied.author.name}: {replied.content}"
-        except:
-            pass
+# ---------- CLEAN INPUT ----------
 
     clean = message.content
     if clean.lower().startswith("yen"):
@@ -290,25 +268,27 @@ async def on_message(message):
 
 # ---------- AI ----------
 
-    reply = ask_ai(clean, uid, reply_context)
+    reply = ask_ai(clean, uid)
 
     conversation_memory.setdefault(uid, []).append(clean)
     conversation_memory[uid].append(reply)
     conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
 
-# ---------- CHAOS ----------
+# ---------- CHAOS (FIXED) ----------
 
     if chaos_mode and random.randint(1,10) <= chaos_level:
-        await message.channel.send(random.choice([
+        reply = random.choice([
             "this server is cursed",
             "something feels off",
             "i'm watching"
-        ]))
+        ])
 
 # ---------- UWU ----------
 
     if str(message.author.id) in uwulocks:
         reply = uwuify(reply)
+
+# ---------- SINGLE SEND ----------
 
     await message.channel.send(reply, allowed_mentions=SAFE_MENTIONS)
 
