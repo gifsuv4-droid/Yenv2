@@ -59,6 +59,28 @@ def uwuify(text):
     text = text.replace("r","w").replace("l","w")
     return text + random.choice([" uwu"," owo"," >w<"])
 
+# ---------- INTENT DETECTION ----------
+
+def detect_intent(text):
+    text = text.lower()
+
+    serious_keywords = [
+        "how", "why", "explain", "what is", "help",
+        "can you", "teach", "difference", "guide"
+    ]
+
+    joke_keywords = [
+        "lol", "lmao", "roast", "joke", "funny",
+        "sus", "weird", "rate me"
+    ]
+
+    if any(k in text for k in serious_keywords):
+        return "serious"
+    if any(k in text for k in joke_keywords):
+        return "joke"
+
+    return "casual"
+
 # ---------- AI ----------
 
 def ask_ai(prompt, user_id, reply_context=None):
@@ -69,6 +91,15 @@ def ask_ai(prompt, user_id, reply_context=None):
     random_gossip = random.choice(gossip.get("logs", [""])) if gossip.get("logs") else ""
 
     context_text = f"\nReplying to:\n{reply_context}\n" if reply_context else ""
+
+    intent = detect_intent(prompt)
+
+    if intent == "serious":
+        tone_instruction = "Be helpful, clear, and concise. Answer properly but briefly."
+    elif intent == "joke":
+        tone_instruction = "Be sarcastic, chaotic, or funny."
+    else:
+        tone_instruction = "Be casual and natural."
 
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -82,12 +113,15 @@ Personality: {personality}
 
 Rules:
 - Talk like a Discord user
-- Keep replies very short (1 sentence preferred)
-- Only use 2 sentences if needed
-- Rarely go above 20 words
-- Be sharp, sarcastic, and natural
-- Avoid long explanations unless asked
-- Occasionally reference gossip
+- Keep replies short (1–2 sentences)
+- If it's a real question, give a helpful answer
+- Don't dismiss serious questions
+- Be sarcastic only when appropriate
+- Avoid long paragraphs
+- Adjust tone based on user intent
+
+Tone:
+{tone_instruction}
 
 Known gossip:
 {random_gossip}
@@ -111,7 +145,7 @@ Known gossip:
             "i refuse to respond to that"
         ])
 
-    # HARD LIMIT (prevents long messages)
+    # HARD LIMIT
     words = reply.split()
     if len(words) > 25:
         reply = " ".join(words[:25]) + "..."
@@ -173,14 +207,14 @@ async def on_message(message):
         if removable:
             await target.remove_roles(*removable)
         else:
-            await message.channel.send("⚠️ couldn't remove some roles (hierarchy issue)")
+            await message.channel.send("⚠️ couldn't remove some roles")
 
         await target.add_roles(role)
 
         try:
             await target.edit(nick="*SLIMED*")
         except:
-            await message.channel.send("⚠️ couldn't change nickname")
+            pass
 
         await message.channel.send(f"{target.mention} got slimed 🟢")
         return
@@ -219,7 +253,7 @@ async def on_message(message):
         try:
             await target.edit(nick=saved["nickname"])
         except:
-            await message.channel.send("⚠️ couldn't restore nickname")
+            pass
 
         del slimed_users[str(target.id)]
         save_json(slimed_users, slime_file)
@@ -227,31 +261,25 @@ async def on_message(message):
         await message.channel.send(f"{target.mention} restored ✅")
         return
 
-# ---------- GOSSIP FILTER ----------
+# ---------- GOSSIP ----------
 
     if (
         len(message.content.split()) > 4
         and not msg.startswith("yen")
-        and not message.author.bot
     ):
         gossip.setdefault("logs", []).append(message.content)
         gossip["logs"] = gossip["logs"][-50:]
         save_json(gossip, gossip_file)
 
-# ---------- AI TRIGGER ----------
+# ---------- TRIGGER ----------
 
     triggers = ["hey yen", "yo yen", "hi yen", "hello yen"]
 
-    should_reply = False
-
-    if msg.startswith("yen"):
-        should_reply = True
-    elif any(msg.startswith(t) for t in triggers):
-        should_reply = True
-    elif random.randint(1, 50) == 1:
-        should_reply = True
-
-    if not should_reply:
+    if not (
+        msg.startswith("yen")
+        or any(msg.startswith(t) for t in triggers)
+        or random.randint(1, 50) == 1
+    ):
         return
 
 # ---------- COOLDOWN ----------
@@ -259,15 +287,10 @@ async def on_message(message):
     uid = str(message.author.id)
     now = time.time()
 
-    if uid in user_cooldowns:
-        if now - user_cooldowns[uid] < COOLDOWN_TIME:
-            return
+    if uid in user_cooldowns and now - user_cooldowns[uid] < COOLDOWN_TIME:
+        return
 
     user_cooldowns[uid] = now
-
-    for u in list(user_cooldowns.keys()):
-        if now - user_cooldowns[u] > 60:
-            del user_cooldowns[u]
 
 # ---------- CONTEXT ----------
 
@@ -283,9 +306,6 @@ async def on_message(message):
 
     if clean.lower().startswith("yen"):
         clean = clean[3:].strip()
-
-    for t in triggers:
-        clean = clean.lower().replace(t, "").strip()
 
 # ---------- AI ----------
 
@@ -304,7 +324,7 @@ async def on_message(message):
             "i'm watching"
         ]))
 
-# ---------- UWU LOCK ----------
+# ---------- UWU ----------
 
     if str(message.author.id) in uwulocks:
         reply = uwuify(reply)
