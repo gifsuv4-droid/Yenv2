@@ -1,10 +1,7 @@
 import discord
 from discord.ext import commands
-import os
-import json
-import time
-import random
-import asyncio
+import os, json, time, random, asyncio, math
+from datetime import timedelta
 from groq import Groq
 
 TOKEN = os.getenv("TOKEN")
@@ -23,96 +20,95 @@ personality = "chaotic sarcastic discord gremlin"
 chaos_mode = True
 chaos_level = 3
 
-memory_file = "memory.json"
-uwu_file = "uwu.json"
-gossip_file = "gossip.json"
-slime_file = "slimed.json"
+memory_file="memory.json"
+uwu_file="uwu.json"
+gossip_file="gossip.json"
+slime_file="slimed.json"
+warn_file="warns.json"
 
-conversation_memory = {}
-user_cooldowns = {}
-processing_messages = {}
+conversation_memory={}
+user_cooldowns={}
+processing_messages={}
 
-MEMORY_LIMIT = 8
-COOLDOWN_TIME = 4
+MEMORY_LIMIT=8
+COOLDOWN_TIME=4
 
 # ---------- FILE ----------
 
-def load_json(file):
-    if os.path.exists(file):
-        with open(file) as f:
-            return json.load(f)
+def load_json(f):
+    if os.path.exists(f):
+        with open(f) as file:
+            return json.load(file)
     return {}
 
-def save_json(data, file):
-    with open(file, "w") as f:
-        json.dump(data, f, indent=2)
+def save_json(d,f):
+    with open(f,"w") as file:
+        json.dump(d,file,indent=2)
 
-uwulocks = load_json(uwu_file)
-gossip = load_json(gossip_file)
-slimed_users = load_json(slime_file)
+uwulocks=load_json(uwu_file)
+gossip=load_json(gossip_file)
+slimed_users=load_json(slime_file)
+warns=load_json(warn_file)
 
-# ---------- UWU ----------
+# ---------- HELPERS ----------
 
-def uwuify(text):
-    return text.replace("r","w").replace("l","w") + random.choice([" uwu"," owo"," >w<"])
+def uwuify(t):
+    return t.replace("r","w").replace("l","w")+random.choice([" uwu"," owo"])
 
-# ---------- INTENT ----------
+def can_moderate(a,t,g):
+    return a==g.owner or a.top_role>t.top_role
 
-def detect_intent(text):
-    text = text.lower()
-    if any(k in text for k in ["how","why","explain","help","what is"]):
-        return "serious"
-    if any(k in text for k in ["roast","lol","funny","joke"]):
-        return "joke"
-    return "casual"
+def fancy(text):
+    normal="abcdefghijklmnopqrstuvwxyz"
+    fancy_="𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣"
+    return text.translate(str.maketrans(normal,fancy_))
+
+# ---------- BUTTON VIEW ----------
+
+class HelpView(discord.ui.View):
+    def __init__(self, user, cmds):
+        super().__init__(timeout=60)
+        self.user=user
+        self.cmds=cmds
+        self.page=0
+        self.per=5
+        self.pages=math.ceil(len(cmds)/self.per)
+
+    def get_embed(self):
+        chunk=self.cmds[self.page*self.per:(self.page+1)*self.per]
+        text="\n".join(fancy(c) for c in chunk)
+        return discord.Embed(
+            title=fancy(f"Yen Commands ({self.page+1}/{self.pages})"),
+            description=text,
+            color=discord.Color.purple()
+        )
+
+    async def interaction_check(self, interaction):
+        return interaction.user == self.user
+
+    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction, button):
+        self.page=(self.page-1)%self.pages
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="➡️", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction, button):
+        self.page=(self.page+1)%self.pages
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
 # ---------- AI ----------
 
-def ask_ai(prompt, user_id):
-
-    history = conversation_memory.get(user_id, [])
-    history_text = "\n".join(history[-MEMORY_LIMIT:])
-
-    intent = detect_intent(prompt)
-
-    tone = {
-        "serious": "Be helpful and concise.",
-        "joke": "Be sarcastic and funny.",
-        "casual": "Be natural."
-    }[intent]
-
-    completion = client.chat.completions.create(
+def ask_ai(prompt, uid):
+    history=conversation_memory.get(uid,[])
+    completion=client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {
-                "role": "system",
-                "content": f"""
-You are Yen, a Discord AI.
-
-Personality: {personality}
-
-Rules:
-- 1-2 sentences only
-- no repeating yourself
-- answer properly if serious
-
-Tone: {tone}
-"""
-            },
-            {
-                "role": "user",
-                "content": f"{history_text}\nUser: {prompt}"
-            }
+            {"role":"system","content":f"Short replies. Personality: {personality}"},
+            {"role":"user","content":"\n".join(history[-MEMORY_LIMIT:])+"\n"+prompt}
         ],
         max_tokens=60
     )
-
-    reply = completion.choices[0].message.content.strip()
-
-    if len(reply) < 3:
-        reply = "skill issue"
-
-    return reply
+    return completion.choices[0].message.content.strip() or "skill issue"
 
 # ---------- EVENTS ----------
 
@@ -126,155 +122,136 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    now = time.time()
+    msg=message.content.lower()
+    now=time.time()
 
-    # HARD duplicate lock
+# FILTER
+    if any(w in msg.replace(" ","") for w in ["nigger","sex","rape","raper","retard","motherfucker"]):
+        try: await message.delete()
+        except: pass
+        await message.channel.send(f"*I'll pretend i didn't see anything {message.author.mention}*")
+        return
+
+# DUPLICATE LOCK
     if message.id in processing_messages:
-        if now - processing_messages[message.id] < 6:
+        if now-processing_messages[message.id]<6:
             return
-    processing_messages[message.id] = now
+    processing_messages[message.id]=now
 
-    msg = message.content.lower()
-
-# ---------- SLIME ----------
-
-    if msg.startswith("yen slime"):
-        if message.author.id != CREATOR_ID:
+# HELP COMMAND
+    if msg=="yen commands":
+        if not message.author.guild_permissions.administrator:
             return
 
-        if not message.mentions:
-            await message.channel.send("who?")
-            return
+        cmds=[
+            "yen kick @user","yen ban @user","yen timeout @user <min>","yen untimeout @user","yen purge <n>",
+            "yen slowmode <sec>","yen nick @user <name>","yen warn @user",
+            "yen slime @user","yen restore @user",
+            "yen <text>","hey yen"
+        ]
 
-        target = message.mentions[0]
-
-        role = discord.utils.find(lambda r: r.name.lower() == "slimed", message.guild.roles)
-        if role is None:
-            role = await message.guild.create_role(name="SLIMED")
-
-        slimed_users[str(target.id)] = {
-            "roles": [r.id for r in target.roles if r != message.guild.default_role],
-            "nickname": target.nick
-        }
-        save_json(slimed_users, slime_file)
-
-        removable = [r for r in target.roles if r != message.guild.default_role and r < message.guild.me.top_role]
-
-        if removable:
-            await target.remove_roles(*removable)
-
-        await target.add_roles(role)
-
-        try:
-            await target.edit(nick="*SLIMED*")
-        except:
-            pass
-
-        await message.channel.send(f"{target.mention} got slimed")
+        view=HelpView(message.author,cmds)
+        await message.channel.send(embed=view.get_embed(), view=view)
         return
 
-# ---------- RESTORE ----------
-
-    if msg.startswith("yen restore"):
-        if message.author.id != CREATOR_ID:
-            return
-
-        if not message.mentions:
-            return
-
-        target = message.mentions[0]
-        saved = slimed_users.get(str(target.id))
-
-        if not saved:
-            return
-
-        roles = [message.guild.get_role(r) for r in saved["roles"] if message.guild.get_role(r)]
-        if roles:
-            await target.add_roles(*roles)
-
-        role = discord.utils.find(lambda r: r.name.lower() == "slimed", message.guild.roles)
-        if role:
-            await target.remove_roles(role)
-
-        try:
-            await target.edit(nick=saved["nickname"])
-        except:
-            pass
-
-        del slimed_users[str(target.id)]
-        save_json(slimed_users, slime_file)
-
-        await message.channel.send(f"{target.mention} restored")
+# SLIME / RESTORE
+    if msg.startswith("yen slime") and message.author.id==CREATOR_ID:
+        if not message.mentions: return
+        t=message.mentions[0]
+        role=discord.utils.get(message.guild.roles,name="SLIMED") or await message.guild.create_role(name="SLIMED")
+        slimed_users[str(t.id)]={"roles":[r.id for r in t.roles if r!=message.guild.default_role],"nickname":t.nick}
+        save_json(slimed_users,slime_file)
+        await t.edit(nick="*SLIMED*")
+        await t.add_roles(role)
+        await message.channel.send("slimed")
         return
 
-# ---------- GOSSIP ----------
-
-    if len(message.content.split()) > 4 and not msg.startswith("yen"):
-        gossip.setdefault("logs", []).append(message.content)
-        gossip["logs"] = gossip["logs"][-50:]
-        save_json(gossip, gossip_file)
-
-# ---------- TRIGGER ----------
-
-    triggers = ["hey yen","hi yen","yo yen","hello yen"]
-
-    if not (
-        msg.startswith("yen")
-        or any(msg.startswith(t) for t in triggers)
-        or random.randint(1,50) == 1
-    ):
+    if msg.startswith("yen restore") and message.author.id==CREATOR_ID:
+        if not message.mentions: return
+        t=message.mentions[0]
+        data=slimed_users.get(str(t.id))
+        if not data: return
+        roles=[message.guild.get_role(r) for r in data["roles"] if message.guild.get_role(r)]
+        if roles: await t.add_roles(*roles)
+        role=discord.utils.get(message.guild.roles,name="SLIMED")
+        if role: await t.remove_roles(role)
+        await t.edit(nick=data["nickname"])
+        del slimed_users[str(t.id)]
+        save_json(slimed_users,slime_file)
+        await message.channel.send("restored")
         return
 
-# ---------- COOLDOWN ----------
+# MOD COMMANDS
+    if msg.startswith("yen kick"):
+        if not message.author.guild_permissions.kick_members: return
+        t=message.mentions[0]
+        if not can_moderate(message.author,t,message.guild): return
+        await t.kick()
+        await message.channel.send("kicked"); return
 
-    uid = str(message.author.id)
+    if msg.startswith("yen ban"):
+        if not message.author.guild_permissions.ban_members: return
+        t=message.mentions[0]
+        if not can_moderate(message.author,t,message.guild): return
+        await t.ban()
+        await message.channel.send("banned"); return
 
-    if uid in user_cooldowns and now - user_cooldowns[uid] < COOLDOWN_TIME:
+    if msg.startswith("yen timeout"):
+        if not message.author.guild_permissions.moderate_members: return
+        t=message.mentions[0]
+        mins=int(msg.split()[3])
+        await t.timeout(timedelta(minutes=mins))
+        await message.channel.send("timed out"); return
+
+    if msg.startswith("yen untimeout"):
+        t=message.mentions[0]
+        await t.timeout(None)
+        await message.channel.send("untimeout"); return
+
+    if msg.startswith("yen purge"):
+        if not message.author.guild_permissions.manage_messages: return
+        n=int(msg.split()[2])
+        await message.channel.purge(limit=n+1); return
+
+    if msg.startswith("yen slowmode"):
+        if not message.author.guild_permissions.manage_channels: return
+        s=int(msg.split()[2])
+        await message.channel.edit(slowmode_delay=s)
+        await message.channel.send("slowmode set"); return
+
+    if msg.startswith("yen nick"):
+        if not message.author.guild_permissions.manage_nicknames: return
+        t=message.mentions[0]
+        name=message.content.split(" ",3)[3]
+        await t.edit(nick=name)
+        await message.channel.send("nick changed"); return
+
+    if msg.startswith("yen warn"):
+        t=message.mentions[0]
+        warns.setdefault(str(t.id),[]).append("warn")
+        save_json(warns,warn_file)
+        await message.channel.send("warned"); return
+
+# TRIGGER
+    if not (msg.startswith("yen") or msg.startswith("hey yen") or random.randint(1,50)==1):
         return
 
-    user_cooldowns[uid] = now
+# COOLDOWN
+    uid=str(message.author.id)
+    if uid in user_cooldowns and now-user_cooldowns[uid]<COOLDOWN_TIME:
+        return
+    user_cooldowns[uid]=now
 
-# ---------- CLEAN ----------
+# AI
+    clean=message.content.replace("yen","",1).strip()
+    reply=ask_ai(clean,uid)
 
-    clean = message.content
-    if clean.lower().startswith("yen"):
-        clean = clean[3:].strip()
-
-# ---------- AI ----------
-
-    reply = ask_ai(clean, uid)
-
-    conversation_memory.setdefault(uid, []).append(clean)
-    conversation_memory[uid].append(reply)
-    conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
-
-# ---------- CHAOS (merged, not extra send) ----------
-
-    if chaos_mode and random.randint(1,10) <= chaos_level:
-        reply = random.choice([
-            "this server is cursed",
-            "i'm watching",
-            "something feels off"
-        ])
-
-# ---------- UWU ----------
-
-    if str(message.author.id) in uwulocks:
-        reply = uwuify(reply)
-
-# ---------- ANTI DUPLICATE INSTANCE ----------
-
-    await asyncio.sleep(random.uniform(0.4, 1.2))
+    await asyncio.sleep(random.uniform(0.4,1.2))
 
     async for m in message.channel.history(limit=5):
-        if m.author == bot.user and m.reference:
-            if m.reference.message_id == message.id:
-                return
+        if m.author==bot.user and m.reference and m.reference.message_id==message.id:
+            return
 
-# ---------- SEND ----------
-
-    await message.reply(reply, allowed_mentions=SAFE_MENTIONS)
-
-# ---------- START ----------
+    await message.reply(reply)
 
 bot.run(TOKEN)
