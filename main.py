@@ -32,6 +32,7 @@ slime_file = "slimed.json"
 conversation_memory = {}
 last_deleted_message = {}
 user_cooldowns = {}
+processed_messages = set()
 
 MEMORY_LIMIT = 8
 COOLDOWN_TIME = 4
@@ -59,26 +60,18 @@ def uwuify(text):
     text = text.replace("r","w").replace("l","w")
     return text + random.choice([" uwu"," owo"," >w<"])
 
-# ---------- INTENT DETECTION ----------
+# ---------- INTENT ----------
 
 def detect_intent(text):
     text = text.lower()
 
-    serious_keywords = [
-        "how", "why", "explain", "what is", "help",
-        "can you", "teach", "difference", "guide"
-    ]
-
-    joke_keywords = [
-        "lol", "lmao", "roast", "joke", "funny",
-        "sus", "weird", "rate me"
-    ]
+    serious_keywords = ["how","why","explain","what is","help","teach","guide"]
+    joke_keywords = ["lol","roast","joke","funny","sus","rate"]
 
     if any(k in text for k in serious_keywords):
         return "serious"
     if any(k in text for k in joke_keywords):
         return "joke"
-
     return "casual"
 
 # ---------- AI ----------
@@ -95,11 +88,11 @@ def ask_ai(prompt, user_id, reply_context=None):
     intent = detect_intent(prompt)
 
     if intent == "serious":
-        tone_instruction = "Be helpful, clear, and concise. Answer properly but briefly."
+        tone = "Be helpful and concise."
     elif intent == "joke":
-        tone_instruction = "Be sarcastic, chaotic, or funny."
+        tone = "Be sarcastic and funny."
     else:
-        tone_instruction = "Be casual and natural."
+        tone = "Be casual."
 
     completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -114,16 +107,14 @@ Personality: {personality}
 Rules:
 - Talk like a Discord user
 - Keep replies short (1–2 sentences)
-- If it's a real question, give a helpful answer
-- Don't dismiss serious questions
-- Be sarcastic only when appropriate
+- Help if it's a real question
+- Don't be overly dismissive
 - Avoid long paragraphs
-- Adjust tone based on user intent
 
 Tone:
-{tone_instruction}
+{tone}
 
-Known gossip:
+Gossip:
 {random_gossip}
 """
             },
@@ -137,15 +128,13 @@ Known gossip:
 
     reply = completion.choices[0].message.content.strip()
 
-    # fallback
     if len(reply) < 3:
         reply = random.choice([
             "that sounds illegal",
             "skill issue",
-            "i refuse to respond to that"
+            "no comment"
         ])
 
-    # HARD LIMIT
     words = reply.split()
     if len(words) > 25:
         reply = " ".join(words[:25]) + "..."
@@ -159,19 +148,21 @@ async def on_ready():
     print("Yen Online")
 
 @bot.event
-async def on_message_delete(message):
-    last_deleted_message[message.channel.id] = {
-        "content": message.content,
-        "author": message.author.name
-    }
-
-@bot.event
 async def on_message(message):
 
-    global chaos_mode, chaos_level, personality
+    global chaos_mode, chaos_level
 
     if message.author.bot:
         return
+
+    # ---------- DUPLICATE FIX ----------
+    if message.id in processed_messages:
+        return
+
+    processed_messages.add(message.id)
+
+    if len(processed_messages) > 1000:
+        processed_messages.clear()
 
     msg = message.content.lower()
 
@@ -189,9 +180,8 @@ async def on_message(message):
         target = message.mentions[0]
 
         role = discord.utils.find(lambda r: r.name.lower() == "slimed", message.guild.roles)
-
         if role is None:
-            role = await message.guild.create_role(name="SLIMED", reason="Slime system")
+            role = await message.guild.create_role(name="SLIMED")
 
         slimed_users[str(target.id)] = {
             "roles": [r.id for r in target.roles if r != message.guild.default_role],
@@ -199,15 +189,10 @@ async def on_message(message):
         }
         save_json(slimed_users, slime_file)
 
-        removable = [
-            r for r in target.roles
-            if r != message.guild.default_role and r < message.guild.me.top_role
-        ]
+        removable = [r for r in target.roles if r != message.guild.default_role and r < message.guild.me.top_role]
 
         if removable:
             await target.remove_roles(*removable)
-        else:
-            await message.channel.send("⚠️ couldn't remove some roles")
 
         await target.add_roles(role)
 
@@ -237,14 +222,9 @@ async def on_message(message):
             await message.channel.send("no saved data")
             return
 
-        roles_to_restore = [
-            message.guild.get_role(rid)
-            for rid in saved["roles"]
-            if message.guild.get_role(rid)
-        ]
-
-        if roles_to_restore:
-            await target.add_roles(*roles_to_restore)
+        roles = [message.guild.get_role(r) for r in saved["roles"] if message.guild.get_role(r)]
+        if roles:
+            await target.add_roles(*roles)
 
         role = discord.utils.find(lambda r: r.name.lower() == "slimed", message.guild.roles)
         if role:
@@ -258,28 +238,30 @@ async def on_message(message):
         del slimed_users[str(target.id)]
         save_json(slimed_users, slime_file)
 
-        await message.channel.send(f"{target.mention} restored ✅")
+        await message.channel.send(f"{target.mention} restored")
         return
 
 # ---------- GOSSIP ----------
 
-    if (
-        len(message.content.split()) > 4
-        and not msg.startswith("yen")
-    ):
+    if len(message.content.split()) > 4 and not msg.startswith("yen"):
         gossip.setdefault("logs", []).append(message.content)
         gossip["logs"] = gossip["logs"][-50:]
         save_json(gossip, gossip_file)
 
 # ---------- TRIGGER ----------
 
-    triggers = ["hey yen", "yo yen", "hi yen", "hello yen"]
+    triggers = ["hey yen","yo yen","hi yen","hello yen"]
 
-    if not (
-        msg.startswith("yen")
-        or any(msg.startswith(t) for t in triggers)
-        or random.randint(1, 50) == 1
-    ):
+    should_reply = False
+
+    if msg.startswith("yen"):
+        should_reply = True
+    elif any(msg.startswith(t) for t in triggers):
+        should_reply = True
+    elif random.randint(1,50) == 1:
+        should_reply = True
+
+    if not should_reply:
         return
 
 # ---------- COOLDOWN ----------
@@ -303,7 +285,6 @@ async def on_message(message):
             pass
 
     clean = message.content
-
     if clean.lower().startswith("yen"):
         clean = clean[3:].strip()
 
