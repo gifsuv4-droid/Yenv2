@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands
 import os, json, time, random, asyncio, math
-from datetime import timedelta
 from groq import Groq
 
 # ---------- ENV ----------
@@ -26,7 +25,6 @@ LOCK_CHANNEL_ID = 1446191246828634223
 IS_LEADER = False
 
 # ---------- CONFIG ----------
-personality = "chaotic sarcastic discord gremlin"
 MEMORY_LIMIT = 8
 COOLDOWN_TIME = 4
 
@@ -67,48 +65,47 @@ async def safe_send(channel, content=None, embed=None, ref=None):
 def can_moderate(a, t, g):
     return a == g.owner or a.top_role > t.top_role
 
-def fancy(text):
-    normal = "abcdefghijklmnopqrstuvwxyz"
-    fancy_ = "𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣"
-    return text.translate(str.maketrans(normal, fancy_))
-
-# ---------- HELP UI ----------
-class HelpView(discord.ui.View):
-    def __init__(self, user, cmds):
-        super().__init__(timeout=60)
-        self.user = user
-        self.cmds = cmds
-        self.page = 0
-        self.per = 5
-        self.pages = math.ceil(len(cmds) / self.per)
-
-    def get_embed(self):
-        chunk = self.cmds[self.page*self.per:(self.page+1)*self.per]
-        text = "\n".join(fancy(c) for c in chunk)
-        return discord.Embed(
-            title=fancy(f"Yen Commands ({self.page+1}/{self.pages})"),
-            description=text,
-            color=discord.Color.purple()
-        )
-
-    async def interaction_check(self, interaction):
-        return interaction.user == self.user
-
-    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary)
-    async def prev(self, interaction, button):
-        self.page = (self.page - 1) % self.pages
-        await interaction.response.edit_message(embed=self.get_embed(), view=self)
-
-    @discord.ui.button(label="➡️", style=discord.ButtonStyle.secondary)
-    async def next(self, interaction, button):
-        self.page = (self.page + 1) % self.pages
-        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+def is_serious(text):
+    text = text.lower()
+    keywords = ["what", "why", "how", "explain", "help", "teach", "difference", "meaning"]
+    return any(k in text for k in keywords)
 
 # ---------- AI ----------
 def ask_ai(prompt, uid):
     history = conversation_memory.get(uid, [])
 
-    messages = [{"role": "system", "content": f"Short replies. Personality: {personality}"}]
+    serious = is_serious(prompt)
+
+    if serious:
+        system_prompt = """
+You are Yen, a Discord bot.
+
+Tone:
+- Short but helpful
+- Clear answers
+- Minimal sarcasm
+
+Rules:
+- 1-2 sentences max
+- Answer correctly
+- No long paragraphs
+"""
+    else:
+        system_prompt = """
+You are Yen, a chaotic Discord bot.
+
+Tone:
+- Brutal, rude, sarcastic
+- Can swear
+- Funny but mean
+
+Rules:
+- 1 sentence replies
+- No long explanations
+- Don't repeat yourself
+"""
+
+    messages = [{"role": "system", "content": system_prompt}]
 
     for i, msg in enumerate(history[-MEMORY_LIMIT:]):
         role = "user" if i % 2 == 0 else "assistant"
@@ -142,12 +139,10 @@ async def on_ready():
     async for msg in channel.history(limit=5):
         if msg.author == bot.user and msg.content == "LOCK":
             IS_LEADER = False
-            print("Another instance active → silent")
             return
 
     await channel.send("LOCK")
     IS_LEADER = True
-    print("Leader instance active")
 
 # ---------- MESSAGE ----------
 @bot.event
@@ -174,28 +169,18 @@ async def on_message(message):
 
     msg = message.content.lower()
 
-    # ---------- HELP ----------
-    if msg == "yen commands":
-        if not message.author.guild_permissions.administrator:
+    # ---------- RESET ----------
+    if msg == "yen reset all":
+        if message.author.id != CREATOR_ID:
             return
 
-        cmds = [
-            "yen purge <n>",
-            "yen nick @user <name>",
-            "yen slime @user",
-            "yen restore @user",
-            "yen <text>",
-            "hey yen"
-        ]
-
-        view = HelpView(message.author, cmds)
-        await message.channel.send(embed=view.get_embed(), view=view)
+        conversation_memory.clear()
+        await safe_send(message.channel, "everyone's memory wiped 🧠💀")
         return
 
     # ---------- SLIME ----------
     if msg.startswith("yen slime") and message.author.id == CREATOR_ID:
         if not message.mentions:
-            await safe_send(message.channel, "who?")
             return
 
         target = message.mentions[0]
@@ -234,7 +219,6 @@ async def on_message(message):
         data = slimed_users.get(str(target.id))
 
         if not data:
-            await safe_send(message.channel, "no saved data")
             return
 
         roles = [message.guild.get_role(r) for r in data["roles"] if message.guild.get_role(r)]
@@ -254,7 +238,7 @@ async def on_message(message):
         del slimed_users[str(target.id)]
         save_json(slimed_users, slime_file)
 
-        await safe_send(message.channel, f"{target.mention} restored ✅")
+        await safe_send(message.channel, f"{target.mention} restored")
         return
 
     # ---------- AI ----------
