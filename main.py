@@ -78,31 +78,15 @@ def ask_ai(prompt, uid):
 
     if serious:
         system_prompt = """
-You are Yen, a Discord bot.
-
-Tone:
-- Short but helpful
-- Clear answers
-- Minimal sarcasm
-
-Rules:
-- 1-2 sentences max
-- Answer correctly
-- No long paragraphs
+Short helpful answer. 1 sentence. No line breaks.
 """
     else:
         system_prompt = """
-You are Yen, a chaotic Discord bot.
-
-Tone:
-- Brutal, rude, sarcastic
-- Can swear
-- Funny but mean
-
-Rules:
-- 1 sentence replies
-- No long explanations
-- Don't repeat yourself
+Reply like a TikTok comment:
+- very short
+- chaotic, rude, sarcastic
+- lowercase, slang ok
+- 1 line only
 """
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -119,7 +103,14 @@ Rules:
             messages=messages,
             max_tokens=60
         )
-        return completion.choices[0].message.content.strip()
+
+        reply = completion.choices[0].message.content.strip()
+
+        # FORCE SINGLE LINE + SHORT
+        reply = reply.split("\n")[0]
+        reply = reply[:120]
+
+        return reply if reply else "..."
     except Exception as e:
         print(e)
         return "brain lag"
@@ -137,11 +128,11 @@ async def on_ready():
         return
 
     async for msg in channel.history(limit=5):
-        if msg.author == bot.user and msg.content == "LOCK":
+        if msg.author == bot.user and msg.content in ["LOCK", "LOCK IN"]:
             IS_LEADER = False
             return
 
-    await channel.send("LOCK")
+    await channel.send("LOCK IN")
     IS_LEADER = True
 
 # ---------- MESSAGE ----------
@@ -175,7 +166,7 @@ async def on_message(message):
             return
 
         conversation_memory.clear()
-        await safe_send(message.channel, "everyone's memory wiped 🧠💀")
+        await safe_send(message.channel, "memory wiped for everyone 🧠💀")
         return
 
     # ---------- SLIME ----------
@@ -241,6 +232,20 @@ async def on_message(message):
         await safe_send(message.channel, f"{target.mention} restored")
         return
 
+    # ---------- HELP ----------
+    if msg == "yen commands":
+        cmds = [
+            "yen reset all (creator)",
+            "yen slime @user",
+            "yen restore @user",
+            "yen <text>",
+            "hey yen"
+        ]
+
+        text = "\n".join(cmds)
+        await safe_send(message.channel, f"commands:\n{text}")
+        return
+
     # ---------- AI ----------
     if not (msg.startswith("yen") or msg.startswith("hey yen") or random.randint(1,50) == 1):
         return
@@ -261,7 +266,7 @@ async def on_message(message):
     conversation_memory[uid].append(reply)
     conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
 
-    await asyncio.sleep(random.uniform(0.4, 1.2))
+    await asyncio.sleep(random.uniform(0.3, 0.8))
     await safe_send(message.channel, reply, ref=message)
 
 # ---------- RUN ----------
