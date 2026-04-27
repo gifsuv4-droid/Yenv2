@@ -62,9 +62,6 @@ async def safe_send(channel, content=None, embed=None, ref=None):
     return await channel.send(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
 
 # ---------- HELPERS ----------
-def can_moderate(a, t, g):
-    return a == g.owner or a.top_role > t.top_role
-
 def fancy(text):
     normal = "abcdefghijklmnopqrstuvwxyz0123456789"
     fancy_ = "𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣0123456789"
@@ -72,7 +69,7 @@ def fancy(text):
 
 def is_serious(text):
     text = text.lower()
-    keywords = ["what", "why", "how", "explain", "help", "teach", "difference", "meaning"]
+    keywords = ["what","why","how","explain","help","teach","difference","meaning"]
     return any(k in text for k in keywords)
 
 # ---------- HELP UI ----------
@@ -114,10 +111,11 @@ def ask_ai(prompt, uid):
 
     serious = is_serious(prompt)
 
-    if serious:
-        system_prompt = "Short helpful answer. 1 sentence. No line breaks."
-    else:
-        system_prompt = "Reply like a TikTok comment: short, chaotic, rude, 1 line."
+    system_prompt = (
+        "Short helpful answer. 1 sentence. No line breaks."
+        if serious else
+        "Reply like a TikTok comment: short, chaotic, rude, 1 line."
+    )
 
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -136,9 +134,7 @@ def ask_ai(prompt, uid):
 
         reply = completion.choices[0].message.content.strip()
         reply = reply.split("\n")[0]
-        reply = reply[:120]
-
-        return reply if reply else "..."
+        return reply[:120] if reply else "..."
     except Exception as e:
         print(e)
         return "brain lag"
@@ -172,6 +168,7 @@ async def on_message(message):
 
     now = time.time()
 
+    # GLOBAL LOCK
     if message.id in message_locks:
         if now - message_locks[message.id] < 5:
             return
@@ -184,33 +181,38 @@ async def on_message(message):
 
     msg = message.content.lower()
 
-    # 🔥 REMOVE ALL ROLES BELOW BOT
-    if msg == "yen wipe roles":
+    # ---------- COMMANDS FIRST (PREVENT AI INTERFERENCE) ----------
+
+    # STRIP ROLES
+    if msg == "yen strip roles":
         if message.author.id != CREATOR_ID:
             return
 
-        count = 0
-        for member in message.guild.members:
-            if member.bot:
-                continue
+        members = [m for m in message.guild.members if not m.bot]
+        total = len(members)
+        done = 0
 
+        for m in members:
             removable = [
-                r for r in member.roles
+                r for r in m.roles
                 if r != message.guild.default_role and r < message.guild.me.top_role
             ]
 
             if removable:
                 try:
-                    await member.remove_roles(*removable)
-                    count += 1
-                    await asyncio.sleep(0.5)
+                    await m.remove_roles(*removable)
                 except:
                     pass
 
-        await safe_send(message.channel, f"removed roles from {count} users")
+            done += 1
+            if done % 5 == 0:
+                percent = int((done / total) * 100)
+                await safe_send(message.channel, f"stripping roles... {percent}%")
+
+        await safe_send(message.channel, "done stripping roles 💀")
         return
 
-    # 🔥 GIVE VERIFIED ROLE TO EVERYONE
+    # GIVE VERIFIED
     if msg == "yen give verified":
         if message.author.id != CREATOR_ID:
             return
@@ -220,23 +222,26 @@ async def on_message(message):
             await safe_send(message.channel, "verified role not found")
             return
 
-        count = 0
-        for member in message.guild.members:
-            if member.bot:
-                continue
+        members = [m for m in message.guild.members if not m.bot]
+        total = len(members)
+        done = 0
 
-            if role not in member.roles:
+        for m in members:
+            if role not in m.roles:
                 try:
-                    await member.add_roles(role)
-                    count += 1
-                    await asyncio.sleep(0.5)
+                    await m.add_roles(role)
                 except:
                     pass
 
-        await safe_send(message.channel, f"verified given to {count} users")
+            done += 1
+            if done % 5 == 0:
+                percent = int((done / total) * 100)
+                await safe_send(message.channel, f"giving verified... {percent}%")
+
+        await safe_send(message.channel, "everyone verified ✅")
         return
 
-    # RESET
+    # RESET MEMORY
     if msg == "yen reset all":
         if message.author.id != CREATOR_ID:
             return
@@ -308,7 +313,7 @@ async def on_message(message):
         await safe_send(message.channel, f"{t.mention} restored")
         return
 
-    # HELP (unchanged)
+    # HELP
     if msg == "yen commands":
         cmds = [
             "yen reset all (creator only)",
@@ -322,7 +327,7 @@ async def on_message(message):
         await message.channel.send(embed=view.get_embed(), view=view)
         return
 
-    # AI
+    # ---------- AI ----------
     if not (msg.startswith("yen") or msg.startswith("hey yen") or random.randint(1,50) == 1):
         return
 
@@ -335,7 +340,6 @@ async def on_message(message):
     user_cooldowns[uid] = now
 
     clean = message.content.replace("yen", "", 1).strip()
-
     reply = ask_ai(clean, uid)
 
     conversation_memory.setdefault(uid, []).append(clean)
