@@ -31,7 +31,6 @@ MEMORY_LIMIT = 8
 COOLDOWN_TIME = 4
 
 slime_file = "slimed.json"
-warn_file = "warns.json"
 
 conversation_memory = {}
 user_cooldowns = {}
@@ -49,7 +48,6 @@ def save_json(d, f):
         json.dump(d, file, indent=2)
 
 slimed_users = load_json(slime_file)
-warns = load_json(warn_file)
 
 # ---------- SAFE SEND ----------
 async def safe_send(channel, content=None, embed=None, ref=None):
@@ -176,69 +174,87 @@ async def on_message(message):
 
     msg = message.content.lower()
 
-    # FILTER
-    if message.author.id not in IMMUNE_USERS:
-        if any(w in msg.replace(" ", "") for w in ["nigger","sex","rape","raper","retard","motherfucker"]):
-            try:
-                await message.delete()
-            except:
-                pass
-            await safe_send(message.channel, f"*I'll pretend i didn't see anything {message.author.mention}*")
-            return
-
-    # ---------- COMMANDS ----------
-
-    # HELP
+    # ---------- HELP ----------
     if msg == "yen commands":
         if not message.author.guild_permissions.administrator:
             return
 
         cmds = [
-            "yen kick @user","yen ban @user","yen timeout @user <min>","yen untimeout @user",
-            "yen purge <n>","yen slowmode <sec>","yen nick @user <name>","yen warn @user",
-            "yen slime @user","yen restore @user","yen <text>","hey yen"
+            "yen purge <n>",
+            "yen nick @user <name>",
+            "yen slime @user",
+            "yen restore @user",
+            "yen <text>",
+            "hey yen"
         ]
 
         view = HelpView(message.author, cmds)
         await message.channel.send(embed=view.get_embed(), view=view)
         return
 
-    # PURGE
-    if msg.startswith("yen purge"):
-        if not message.author.guild_permissions.manage_messages:
-            return
-        try:
-            n = int(msg.split()[2])
-        except:
-            await safe_send(message.channel, "invalid number")
-            return
-
-        deleted = await message.channel.purge(limit=n + 1)
-        await safe_send(message.channel, f"deleted {len(deleted)-1} messages")
-        return
-
-    # NICK
-    if msg.startswith("yen nick"):
-        if not message.author.guild_permissions.manage_nicknames:
-            return
+    # ---------- SLIME ----------
+    if msg.startswith("yen slime") and message.author.id == CREATOR_ID:
         if not message.mentions:
+            await safe_send(message.channel, "who?")
             return
 
         target = message.mentions[0]
 
-        if not can_moderate(message.author, target, message.guild):
-            return
+        role = discord.utils.get(message.guild.roles, name="SLIMED")
+        if role is None:
+            role = await message.guild.create_role(name="SLIMED")
+
+        slimed_users[str(target.id)] = {
+            "roles": [r.id for r in target.roles if r != message.guild.default_role],
+            "nickname": target.nick
+        }
+        save_json(slimed_users, slime_file)
+
+        removable = [r for r in target.roles if r != message.guild.default_role and r < message.guild.me.top_role]
+
+        if removable:
+            await target.remove_roles(*removable)
+
+        await target.add_roles(role)
 
         try:
-            name = message.content.split(" ", 3)[3]
+            await target.edit(nick="*SLIMED*")
         except:
+            pass
+
+        await safe_send(message.channel, f"{target.mention} got slimed 🟢")
+        return
+
+    # ---------- RESTORE ----------
+    if msg.startswith("yen restore") and message.author.id == CREATOR_ID:
+        if not message.mentions:
             return
 
+        target = message.mentions[0]
+        data = slimed_users.get(str(target.id))
+
+        if not data:
+            await safe_send(message.channel, "no saved data")
+            return
+
+        roles = [message.guild.get_role(r) for r in data["roles"] if message.guild.get_role(r)]
+
+        if roles:
+            await target.add_roles(*roles)
+
+        role = discord.utils.get(message.guild.roles, name="SLIMED")
+        if role:
+            await target.remove_roles(role)
+
         try:
-            await target.edit(nick=name)
-            await safe_send(message.channel, "nick changed")
+            await target.edit(nick=data["nickname"])
         except:
-            await safe_send(message.channel, "failed (role hierarchy?)")
+            pass
+
+        del slimed_users[str(target.id)]
+        save_json(slimed_users, slime_file)
+
+        await safe_send(message.channel, f"{target.mention} restored ✅")
         return
 
     # ---------- AI ----------
@@ -254,6 +270,7 @@ async def on_message(message):
     user_cooldowns[uid] = now
 
     clean = message.content.replace("yen", "", 1).strip()
+
     reply = ask_ai(clean, uid)
 
     conversation_memory.setdefault(uid, []).append(clean)
