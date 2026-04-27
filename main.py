@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import os, json, time, random, asyncio, math
+import os, json, time, random, asyncio, math, unicodedata
 from groq import Groq
 
 # ---------- ENV ----------
@@ -34,6 +34,10 @@ conversation_memory = {}
 user_cooldowns = {}
 message_locks = {}
 
+# ---------- NORMALIZE ----------
+def normalize_text(text):
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
+
 # ---------- FILE ----------
 def load_json(f):
     if os.path.exists(f):
@@ -49,16 +53,8 @@ slimed_users = load_json(slime_file)
 
 # ---------- SAFE SEND ----------
 async def safe_send(channel, content=None, embed=None, ref=None):
-    async for m in channel.history(limit=6):
-        if m.author == bot.user:
-            if content and m.content == content:
-                return
-            if embed and m.embeds and m.embeds[0].title == embed.title:
-                return
-
     if ref:
         return await ref.reply(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
-
     return await channel.send(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
 
 # ---------- HELPERS ----------
@@ -69,52 +65,16 @@ def fancy(text):
 
 def is_serious(text):
     text = text.lower()
-    keywords = ["what","why","how","explain","help","teach","difference","meaning"]
-    return any(k in text for k in keywords)
-
-# ---------- HELP UI ----------
-class HelpView(discord.ui.View):
-    def __init__(self, user, cmds):
-        super().__init__(timeout=60)
-        self.user = user
-        self.cmds = cmds
-        self.page = 0
-        self.per = 5
-        self.pages = math.ceil(len(cmds) / self.per)
-
-    def get_embed(self):
-        chunk = self.cmds[self.page*self.per:(self.page+1)*self.per]
-        text = "\n".join(fancy(c) for c in chunk)
-
-        return discord.Embed(
-            title=fancy(f"Yen Commands ({self.page+1}/{self.pages})"),
-            description=text,
-            color=discord.Color.purple()
-        )
-
-    async def interaction_check(self, interaction):
-        return interaction.user == self.user
-
-    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary)
-    async def prev(self, interaction, button):
-        self.page = (self.page - 1) % self.pages
-        await interaction.response.edit_message(embed=self.get_embed(), view=self)
-
-    @discord.ui.button(label="➡️", style=discord.ButtonStyle.secondary)
-    async def next(self, interaction, button):
-        self.page = (self.page + 1) % self.pages
-        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+    return any(k in text for k in ["what","why","how","help","explain"])
 
 # ---------- AI ----------
 def ask_ai(prompt, uid):
     history = conversation_memory.get(uid, [])
 
-    serious = is_serious(prompt)
-
     system_prompt = (
-        "Short helpful answer. 1 sentence. No line breaks."
-        if serious else
-        "Reply like a TikTok comment: short, chaotic, rude, 1 line."
+        "Short helpful answer. 1 sentence."
+        if is_serious(prompt)
+        else "Reply like a TikTok comment: rude, chaotic, 1 line."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -126,17 +86,14 @@ def ask_ai(prompt, uid):
     messages.append({"role": "user", "content": prompt})
 
     try:
-        completion = client.chat.completions.create(
+        res = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=messages,
             max_tokens=60
         )
-
-        reply = completion.choices[0].message.content.strip()
-        reply = reply.split("\n")[0]
-        return reply[:120] if reply else "..."
-    except Exception as e:
-        print(e)
+        reply = res.choices[0].message.content.strip().split("\n")[0]
+        return reply[:120]
+    except:
         return "brain lag"
 
 # ---------- READY ----------
@@ -160,186 +117,180 @@ async def on_ready():
 @bot.event
 async def on_message(message):
 
-    if message.author.bot:
-        return
-
-    if not IS_LEADER:
+    if message.author.bot or not IS_LEADER:
         return
 
     now = time.time()
 
-    # GLOBAL LOCK
-    if message.id in message_locks:
-        if now - message_locks[message.id] < 5:
-            return
-
+    if message.id in message_locks and now - message_locks[message.id] < 5:
+        return
     message_locks[message.id] = now
 
+    # clean old locks
     for k in list(message_locks.keys()):
         if now - message_locks[k] > 10:
             del message_locks[k]
 
-    msg = message.content.lower()
+    raw = message.content
+    msg = normalize_text(raw.lower())
 
-    # ---------- COMMANDS FIRST (PREVENT AI INTERFERENCE) ----------
+    # ---------- COMMAND DETECTION ----------
+    if msg.startswith("yen"):
 
-    # STRIP ROLES
-    if msg == "yen strip roles":
-        if message.author.id != CREATOR_ID:
+        # STRIP ROLES
+        if msg == "yen strip roles":
+            if message.author.id != CREATOR_ID:
+                return
+
+            members = [m for m in message.guild.members if not m.bot]
+            total = len(members)
+
+            for i, m in enumerate(members, 1):
+                removable = [r for r in m.roles if r != message.guild.default_role and r < message.guild.me.top_role]
+
+                if removable:
+                    try:
+                        await m.remove_roles(*removable)
+                    except:
+                        pass
+
+                if i % 5 == 0:
+                    await safe_send(message.channel, f"{int((i/total)*100)}%")
+
+            await safe_send(message.channel, "done stripping roles 💀")
             return
 
-        members = [m for m in message.guild.members if not m.bot]
-        total = len(members)
-        done = 0
+        # GIVE VERIFIED
+        if msg == "yen give verified":
+            if message.author.id != CREATOR_ID:
+                return
 
-        for m in members:
-            removable = [
-                r for r in m.roles
-                if r != message.guild.default_role and r < message.guild.me.top_role
-            ]
+            role = discord.utils.get(message.guild.roles, name="Verified")
+            if not role:
+                await safe_send(message.channel, "verified role not found")
+                return
+
+            members = [m for m in message.guild.members if not m.bot]
+            total = len(members)
+
+            for i, m in enumerate(members, 1):
+                if role not in m.roles:
+                    try:
+                        await m.add_roles(role)
+                    except:
+                        pass
+
+                if i % 5 == 0:
+                    await safe_send(message.channel, f"{int((i/total)*100)}%")
+
+            await safe_send(message.channel, "everyone verified ✅")
+            return
+
+        # RESET
+        if msg == "yen reset all":
+            if message.author.id != CREATOR_ID:
+                return
+
+            conversation_memory.clear()
+            await safe_send(message.channel, "memory wiped 🧠💀")
+            return
+
+        # SLIME
+        if msg.startswith("yen slime") and message.author.id == CREATOR_ID:
+            if not message.mentions:
+                return
+
+            t = message.mentions[0]
+
+            role = discord.utils.get(message.guild.roles, name="SLIMED")
+            if not role:
+                role = await message.guild.create_role(name="SLIMED")
+
+            slimed_users[str(t.id)] = {
+                "roles": [r.id for r in t.roles if r != message.guild.default_role],
+                "nickname": t.nick
+            }
+            save_json(slimed_users, slime_file)
+
+            removable = [r for r in t.roles if r != message.guild.default_role and r < message.guild.me.top_role]
 
             if removable:
-                try:
-                    await m.remove_roles(*removable)
-                except:
-                    pass
+                await t.remove_roles(*removable)
 
-            done += 1
-            if done % 5 == 0:
-                percent = int((done / total) * 100)
-                await safe_send(message.channel, f"stripping roles... {percent}%")
+            await t.add_roles(role)
 
-        await safe_send(message.channel, "done stripping roles 💀")
-        return
+            try:
+                await t.edit(nick="*SLIMED*")
+            except:
+                pass
 
-    # GIVE VERIFIED
-    if msg == "yen give verified":
-        if message.author.id != CREATOR_ID:
+            await safe_send(message.channel, f"{t.mention} got slimed 🟢")
             return
 
-        role = discord.utils.get(message.guild.roles, name="Verified")
-        if not role:
-            await safe_send(message.channel, "verified role not found")
+        # RESTORE
+        if msg.startswith("yen restore") and message.author.id == CREATOR_ID:
+            if not message.mentions:
+                return
+
+            t = message.mentions[0]
+            data = slimed_users.get(str(t.id))
+
+            if not data:
+                return
+
+            roles = [message.guild.get_role(r) for r in data["roles"] if message.guild.get_role(r)]
+
+            if roles:
+                await t.add_roles(*roles)
+
+            role = discord.utils.get(message.guild.roles, name="SLIMED")
+            if role:
+                await t.remove_roles(role)
+
+            try:
+                await t.edit(nick=data["nickname"])
+            except:
+                pass
+
+            del slimed_users[str(t.id)]
+            save_json(slimed_users, slime_file)
+
+            await safe_send(message.channel, f"{t.mention} restored")
             return
 
-        members = [m for m in message.guild.members if not m.bot]
-        total = len(members)
-        done = 0
+        # HELP
+        if msg == "yen commands":
+            cmds = [
+                "yen strip roles",
+                "yen give verified",
+                "yen reset all",
+                "yen slime @user",
+                "yen restore @user"
+            ]
 
-        for m in members:
-            if role not in m.roles:
-                try:
-                    await m.add_roles(role)
-                except:
-                    pass
+            embed = discord.Embed(
+                title=fancy("Yen Commands"),
+                description="\n".join(fancy(c) for c in cmds),
+                color=discord.Color.purple()
+            )
 
-            done += 1
-            if done % 5 == 0:
-                percent = int((done / total) * 100)
-                await safe_send(message.channel, f"giving verified... {percent}%")
-
-        await safe_send(message.channel, "everyone verified ✅")
-        return
-
-    # RESET MEMORY
-    if msg == "yen reset all":
-        if message.author.id != CREATOR_ID:
+            await safe_send(message.channel, embed=embed)
             return
 
-        conversation_memory.clear()
-        await safe_send(message.channel, "memory wiped 🧠💀")
-        return
-
-    # SLIME
-    if msg.startswith("yen slime") and message.author.id == CREATOR_ID:
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-
-        role = discord.utils.get(message.guild.roles, name="SLIMED")
-        if role is None:
-            role = await message.guild.create_role(name="SLIMED")
-
-        slimed_users[str(t.id)] = {
-            "roles": [r.id for r in t.roles if r != message.guild.default_role],
-            "nickname": t.nick
-        }
-        save_json(slimed_users, slime_file)
-
-        removable = [r for r in t.roles if r != message.guild.default_role and r < message.guild.me.top_role]
-
-        if removable:
-            await t.remove_roles(*removable)
-
-        await t.add_roles(role)
-
-        try:
-            await t.edit(nick="*SLIMED*")
-        except:
-            pass
-
-        await safe_send(message.channel, f"{t.mention} got slimed 🟢")
-        return
-
-    # RESTORE
-    if msg.startswith("yen restore") and message.author.id == CREATOR_ID:
-        if not message.mentions:
-            return
-
-        t = message.mentions[0]
-        data = slimed_users.get(str(t.id))
-
-        if not data:
-            return
-
-        roles = [message.guild.get_role(r) for r in data["roles"] if message.guild.get_role(r)]
-
-        if roles:
-            await t.add_roles(*roles)
-
-        role = discord.utils.get(message.guild.roles, name="SLIMED")
-        if role:
-            await t.remove_roles(role)
-
-        try:
-            await t.edit(nick=data["nickname"])
-        except:
-            pass
-
-        del slimed_users[str(t.id)]
-        save_json(slimed_users, slime_file)
-
-        await safe_send(message.channel, f"{t.mention} restored")
-        return
-
-    # HELP
-    if msg == "yen commands":
-        cmds = [
-            "yen reset all (creator only)",
-            "yen slime @user",
-            "yen restore @user",
-            "yen <text>",
-            "hey yen"
-        ]
-
-        view = HelpView(message.author, cmds)
-        await message.channel.send(embed=view.get_embed(), view=view)
-        return
+        return  # stops AI completely if command used
 
     # ---------- AI ----------
-    if not (msg.startswith("yen") or msg.startswith("hey yen") or random.randint(1,50) == 1):
+    if not (msg.startswith("hey yen") or random.randint(1,50) == 1):
         return
 
     uid = str(message.author.id)
 
-    if uid in user_cooldowns:
-        if now - user_cooldowns[uid] < COOLDOWN_TIME:
-            return
+    if uid in user_cooldowns and now - user_cooldowns[uid] < COOLDOWN_TIME:
+        return
 
     user_cooldowns[uid] = now
 
-    clean = message.content.replace("yen", "", 1).strip()
+    clean = raw.replace("yen", "", 1).strip()
     reply = ask_ai(clean, uid)
 
     conversation_memory.setdefault(uid, []).append(clean)
@@ -347,7 +298,7 @@ async def on_message(message):
     conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
 
     await asyncio.sleep(random.uniform(0.3, 0.8))
-    await safe_send(message.channel, reply, ref=message)
+    await message.reply(reply, allowed_mentions=SAFE_MENTIONS)
 
 # ---------- RUN ----------
 bot.run(TOKEN)
