@@ -85,7 +85,7 @@ def can_act(a, t):
         return False
     return a.guild_permissions.administrator or a.top_role > t.top_role
 
-# ================= GROQ AI (FIXED 400 ERROR) =================
+# ================= GROQ AI (SAFE + DEBUG) =================
 def ask_ai(uid, text):
     if not GROQ_KEY:
         return "AI not configured"
@@ -96,7 +96,7 @@ def ask_ai(uid, text):
         {"role": "system", "content": "short chaotic assistant max 40 tokens"}
     ]
 
-    # ✔ FIXED MEMORY FORMAT (prevents 400 error)
+    # Safe memory format
     if history:
         messages.append({
             "role": "user",
@@ -105,7 +105,6 @@ def ask_ai(uid, text):
 
     messages.append({"role": "user", "content": text})
 
-    # safety cap
     messages = messages[:10]
 
     try:
@@ -113,16 +112,17 @@ def ask_ai(uid, text):
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}"},
             json={
-                "model": "llama-3.1-70b-versatile",
+                "model": "llama-3.1-8b-instant",  # budget + stable
                 "messages": messages,
-                "max_tokens": 80,
+                "max_tokens": 50,  # cheap + enough
                 "temperature": 0.8
             },
             timeout=10
         )
 
-        # DEBUG (optional, helps if errors return again)
-        # print(r.text)
+        # ✅ SAFE DEBUG (won't crash)
+        print("STATUS:", r.status_code)
+        print("RESPONSE:", r.text)
 
         if r.status_code != 200:
             return f"AI HTTP ERROR {r.status_code}"
@@ -138,7 +138,8 @@ def ask_ai(uid, text):
 
         return choices[0].get("message", {}).get("content", "AI empty response")
 
-    except Exception:
+    except Exception as e:
+        print("EXCEPTION:", str(e))
         return "AI offline 💀"
 
 # ================= MESSAGE =================
@@ -164,7 +165,6 @@ async def on_message(message):
             log(message.guild, f"FILTER {message.author}")
             return await message.channel.send("blocked ⚠️")
 
-    # ================= AI TRIGGER =================
     if msg.startswith("hey yen"):
 
         uid = str(message.author.id)
@@ -219,7 +219,7 @@ class Dashboard(discord.ui.View):
         ai_status = "🟢 ONLINE" if GROQ_KEY else "🔴 OFFLINE"
 
         e = discord.Embed(
-            title=" CONTROL CORE V9.3 ONLINE",
+            title="CONTROL CORE V9.3 ONLINE",
             description="```NEON SYSTEM STABLE BUILD```",
             color=discord.Color.purple()
         )
