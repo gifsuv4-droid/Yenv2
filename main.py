@@ -185,16 +185,16 @@ async def on_ready():
     ch = bot.get_channel(LOCK_CHANNEL_ID)
 
     if ch:
-        await ch.send("🔐 SYSTEM BOOTING...")
+        await ch.send(" SYSTEM BOOTING...")
         await asyncio.sleep(1)
-        await ch.send("🧠 AI CORE INITIALIZED")
+        await ch.send(" AI CORE INITIALIZED")
         await asyncio.sleep(1)
-        await ch.send("⚙️ MODULE CHECK COMPLETE")
+        await ch.send(" MODULE CHECK COMPLETE")
         await asyncio.sleep(1)
 
         IS_LEADER = True
 
-        await ch.send("🔐 LOCK IN COMPLETE — YEN V9.3 ONLINE")
+        await ch.send(" LOCK IN COMPLETE — YEN V9.3 ONLINE")
 
 # ================= DASHBOARD =================
 class Dashboard(discord.ui.View):
