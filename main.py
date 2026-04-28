@@ -85,19 +85,28 @@ def can_act(a, t):
         return False
     return a.guild_permissions.administrator or a.top_role > t.top_role
 
-# ================= GROQ AI (FIXED + SAFE) =================
+# ================= GROQ AI (FIXED 400 ERROR) =================
 def ask_ai(uid, text):
     if not GROQ_KEY:
         return "AI not configured"
 
     history = memory.get(str(uid), [])[-6:]
 
-    messages = [{"role": "system", "content": "short chaotic assistant max 40 tokens"}]
+    messages = [
+        {"role": "system", "content": "short chaotic assistant max 40 tokens"}
+    ]
 
-    for h in history:
-        messages.append({"role": "user", "content": h})
+    # ✔ FIXED MEMORY FORMAT (prevents 400 error)
+    if history:
+        messages.append({
+            "role": "user",
+            "content": "Previous context: " + " | ".join(history[-3:])
+        })
 
     messages.append({"role": "user", "content": text})
+
+    # safety cap
+    messages = messages[:10]
 
     try:
         r = requests.post(
@@ -106,17 +115,19 @@ def ask_ai(uid, text):
             json={
                 "model": "llama3-8b-8192",
                 "messages": messages,
-                "max_tokens": 40,
+                "max_tokens": 80,
                 "temperature": 0.8
             },
             timeout=10
         )
 
-        data = r.json()
+        # DEBUG (optional, helps if errors return again)
+        # print(r.text)
 
-        # ================= SAFE ERROR HANDLING =================
         if r.status_code != 200:
             return f"AI HTTP ERROR {r.status_code}"
+
+        data = r.json()
 
         if "error" in data:
             return f"AI ERROR: {data['error'].get('message', 'unknown')}"
@@ -127,7 +138,7 @@ def ask_ai(uid, text):
 
         return choices[0].get("message", {}).get("content", "AI empty response")
 
-    except Exception as e:
+    except Exception:
         return "AI offline 💀"
 
 # ================= MESSAGE =================
@@ -185,16 +196,16 @@ async def on_ready():
     ch = bot.get_channel(LOCK_CHANNEL_ID)
 
     if ch:
-        await ch.send(" SYSTEM BOOTING...")
+        await ch.send("BOOTING...")
         await asyncio.sleep(1)
-        await ch.send(" AI CORE INITIALIZED")
+        await ch.send("AI CORE INITIALIZED")
         await asyncio.sleep(1)
-        await ch.send(" MODULE CHECK COMPLETE")
+        await ch.send("MODULE CHECK COMPLETE")
         await asyncio.sleep(1)
 
         IS_LEADER = True
 
-        await ch.send(" LOCK IN COMPLETE — YEN V9.3 ONLINE")
+        await ch.send("LOCK IN COMPLETE — YEN V9.3 ONLINE")
 
 # ================= DASHBOARD =================
 class Dashboard(discord.ui.View):
@@ -208,7 +219,7 @@ class Dashboard(discord.ui.View):
         ai_status = "🟢 ONLINE" if GROQ_KEY else "🔴 OFFLINE"
 
         e = discord.Embed(
-            title="🟣 YEN CONTROL CORE V9.3",
+            title=" CONTROL CORE V9.3 ONLINE",
             description="```NEON SYSTEM STABLE BUILD```",
             color=discord.Color.purple()
         )
