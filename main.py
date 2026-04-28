@@ -52,7 +52,7 @@ MAX_LOCK = 2500
 
 # ================= UTIL =================
 def norm(t):
-    return unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode()
+    return unicodedata.normalize("NFKD", t).encode("ascii", "ignore").decode()
 
 def log(guild, text):
     if not guild:
@@ -63,7 +63,7 @@ def log(guild, text):
     logs[gid] = logs[gid][-20:]
     save(FILES["logs"], logs)
 
-# ================= SECURITY CORE =================
+# ================= SECURITY =================
 def secure(msg):
     if not msg or not msg.guild:
         return False
@@ -87,9 +87,6 @@ def can_act(a, t):
     if not a or not t:
         return False
     return is_creator(a) or a.top_role > t.top_role
-
-def bot_can(t, g):
-    return g and g.me and g.me.top_role > t.top_role
 
 # ================= GROQ AI =================
 def ask_ai(uid, text):
@@ -117,7 +114,9 @@ def ask_ai(uid, text):
             },
             timeout=10
         )
-        return r.json()["choices"][0]["message"]["content"]
+
+        data = r.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "AI error")
 
     except:
         return "AI offline 💀"
@@ -129,8 +128,9 @@ class Dashboard(discord.ui.View):
         self.page = "home"
         self.target_user = None
 
-    def embed(self, g):
+    def embed(self, interaction: discord.Interaction):
 
+        g = interaction.guild
         ai_status = "🟢 ONLINE" if GROQ_KEY else "🔴 OFFLINE"
 
         e = discord.Embed(
@@ -152,30 +152,33 @@ class Dashboard(discord.ui.View):
             )
 
         elif self.page == "logs":
-            logs_data = logs.get(str(g.id), [])[-8:]
-            e.description = "\n".join(logs_data) if logs_data else "No logs"
+            if g:
+                logs_data = logs.get(str(g.id), [])[-8:]
+                e.description = "\n".join(logs_data) if logs_data else "No logs"
+            else:
+                e.description = "No guild context"
 
         return e
 
-    # NAV
+    # NAV BUTTONS
     @discord.ui.button(label="HOME")
-    async def home(self, i, b):
+    async def home(self, i: discord.Interaction, button: discord.ui.Button):
         self.page = "home"
-        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+        await i.response.edit_message(embed=self.embed(i), view=self)
 
     @discord.ui.button(label="MOD")
-    async def mod(self, i, b):
+    async def mod(self, i: discord.Interaction, button: discord.ui.Button):
         self.page = "moderation"
-        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+        await i.response.edit_message(embed=self.embed(i), view=self)
 
     @discord.ui.button(label="LOGS")
-    async def logs_btn(self, i, b):
+    async def logs_btn(self, i: discord.Interaction, button: discord.ui.Button):
         self.page = "logs"
-        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+        await i.response.edit_message(embed=self.embed(i), view=self)
 
-    # SAFE MOD ACTIONS
+    # MOD ACTIONS
     @discord.ui.button(label="BAN")
-    async def ban(self, i, b):
+    async def ban(self, i: discord.Interaction, button: discord.ui.Button):
 
         if not i.user.guild_permissions.administrator:
             return await i.response.send_message("no permission", ephemeral=True)
@@ -194,7 +197,7 @@ class Dashboard(discord.ui.View):
             await i.response.send_message("failed", ephemeral=True)
 
     @discord.ui.button(label="KICK")
-    async def kick(self, i, b):
+    async def kick(self, i: discord.Interaction, button: discord.ui.Button):
 
         if not i.user.guild_permissions.administrator:
             return await i.response.send_message("no permission", ephemeral=True)
@@ -212,7 +215,7 @@ class Dashboard(discord.ui.View):
         except:
             await i.response.send_message("failed", ephemeral=True)
 
-# ================= READY (LOCK SYSTEM) =================
+# ================= READY =================
 @bot.event
 async def on_ready():
 
@@ -221,13 +224,10 @@ async def on_ready():
 
     if ch:
         await ch.send("🔐 SYSTEM BOOTING...")
-
         await asyncio.sleep(1)
         await ch.send("🧠 AI CORE INITIALIZED")
-
         await asyncio.sleep(1)
         await ch.send("⚙️ MODULE CHECK COMPLETE")
-
         await asyncio.sleep(1)
 
         IS_LEADER = True
@@ -246,7 +246,6 @@ async def on_message(message):
 
     msg = norm(message.content.lower())
 
-    # FILTER
     bad = filters.get(str(message.guild.id), [])
 
     for w in bad:
@@ -258,7 +257,6 @@ async def on_message(message):
             log(message.guild, f"FILTER {message.author}")
             return await message.channel.send("blocked ⚠️")
 
-    # AI
     if msg.startswith("hey yen"):
 
         uid = str(message.author.id)
