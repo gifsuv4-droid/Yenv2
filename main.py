@@ -4,6 +4,7 @@ import os, json, time, random, asyncio, unicodedata, math
 
 # ---------- ENV ----------
 TOKEN = os.getenv("TOKEN")
+
 if not TOKEN:
     raise ValueError("Missing TOKEN")
 
@@ -14,74 +15,76 @@ bot = commands.Bot(command_prefix="", intents=intents)
 SAFE_MENTIONS = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
 CREATOR_ID = 1383111113016872980
+
 LOCK_CHANNEL_ID = 1446191246828634223
 IS_LEADER = False
 
+# ---------- CONFIG ----------
+MEMORY_LIMIT = 6
+COOLDOWN_TIME = 3
+
+conversation_memory = {}
+user_cooldowns = {}
+
 # ---------- FILES ----------
-FILES = {
-    "slime": "slimed.json",
-    "ignore": "ignore_roles.json",
-    "auto": "auto_roles.json",
-    "filter": "filter.json"
-}
+ignore_file = "ignore_roles.json"
+role_map_file = "role_map.json"
 
 def load_json(f):
     if os.path.exists(f):
-        with open(f) as file:
+        with open(f, "r") as file:
             return json.load(file)
     return {}
 
-def save_json(d, f):
+def save_json(data, f):
     with open(f, "w") as file:
-        json.dump(d, file, indent=2)
+        json.dump(data, file, indent=2)
 
-slimed_users = load_json(FILES["slime"])
-ignored_roles = load_json(FILES["ignore"])
-auto_roles = load_json(FILES["auto"])
-filtered_words = load_json(FILES["filter"])
+ignored_roles = load_json(ignore_file)
+role_map = load_json(role_map_file)
 
-DEFAULT_FILTER = ["badword1", "badword2"]
+# ---------- NORMALIZE ----------
+def normalize_text(text):
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
 
-# ---------- STATE ----------
-conversation_memory = {}
-user_cooldowns = {}
-message_locks = {}
-
-# ---------- UTIL ----------
-def normalize_text(t):
-    return unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode("ascii")
-
-async def safe_send(ch, content=None, embed=None, ref=None):
+# ---------- SAFE SEND ----------
+async def safe_send(channel, content=None, embed=None, ref=None):
     if ref:
         return await ref.reply(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
-    return await ch.send(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
+    return await channel.send(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
 
-def fancy(t):
+# ---------- FANCY TEXT ----------
+def fancy(text):
     normal = "abcdefghijklmnopqrstuvwxyz0123456789"
     fancy_ = "𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣0123456789"
-    return t.lower().translate(str.maketrans(normal, fancy_))
+    return text.lower().translate(str.maketrans(normal, fancy_))
 
 # ---------- ROLE LOGIC ----------
-def get_effective_top_role(member, guild):
+def get_effective_role(member, guild):
     ignored = ignored_roles.get(str(guild.id), [])
     roles = [r for r in member.roles if r.id not in ignored]
     return max(roles, key=lambda r: r.position, default=guild.default_role)
 
-def can_act(a, t, g):
-    return a == g.owner or get_effective_top_role(a,g) > get_effective_top_role(t,g)
+def can_act(author, target, guild):
+    if author.id == CREATOR_ID:
+        return True
+    return get_effective_role(author, guild) > get_effective_role(target, guild)
 
-def bot_can_act(t, g):
-    return g.me.top_role > get_effective_top_role(t,g)
+def bot_can_act(target, guild):
+    return guild.me.top_role > get_effective_role(target, guild)
 
-# ---------- AI ----------
+# ---------- SIMPLE AI ----------
 def simple_ai(text):
-    text = text.lower()
-    if any(x in text for x in ["what","how","why","help"]):
-        return "google exists bro"
-    return random.choice([
-        "nah 💀","skill issue","cry about it",
-        "mid take","you good?","ain't no way"
-    ])
+    replies = [
+        "nah 💀",
+        "bro what",
+        "you good?",
+        "skill issue",
+        "ain't no way",
+        "mid take",
+        "💀"
+    ]
+    return random.choice(replies)
 
 # ---------- HELP UI ----------
 class HelpView(discord.ui.View):
@@ -90,211 +93,225 @@ class HelpView(discord.ui.View):
         self.user = user
         self.cmds = cmds
         self.page = 0
-        self.per = 6
-        self.pages = math.ceil(len(cmds)/self.per)
+        self.per = 5
+        self.pages = math.ceil(len(cmds) / self.per)
 
     def get_embed(self):
         chunk = self.cmds[self.page*self.per:(self.page+1)*self.per]
+
         return discord.Embed(
-            title=fancy(f"Yen Commands ({self.page+1}/{self.pages})"),
+            title=fancy(f"YEN COMMANDS ({self.page+1}/{self.pages})"),
             description="\n".join(fancy(c) for c in chunk),
             color=discord.Color.purple()
         )
 
-    async def interaction_check(self, i):
-        return i.user == self.user
+    async def interaction_check(self, interaction):
+        return interaction.user == self.user
 
     @discord.ui.button(label="⬅️")
-    async def prev(self, i, b):
-        self.page = (self.page-1)%self.pages
-        await i.response.edit_message(embed=self.get_embed(), view=self)
+    async def prev(self, interaction, button):
+        self.page = (self.page - 1) % self.pages
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     @discord.ui.button(label="➡️")
-    async def next(self, i, b):
-        self.page = (self.page+1)%self.pages
-        await i.response.edit_message(embed=self.get_embed(), view=self)
+    async def next(self, interaction, button):
+        self.page = (self.page + 1) % self.pages
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
 # ---------- READY ----------
 @bot.event
 async def on_ready():
     global IS_LEADER
     ch = bot.get_channel(LOCK_CHANNEL_ID)
-    if not ch: return
 
-    async for m in ch.history(limit=5):
-        if m.author == bot.user:
-            IS_LEADER = False
-            return
+    if not ch:
+        return
 
     await ch.send("LOCK IN, SYSTEM UPDATED, NEW VERSION EXECUTING")
     IS_LEADER = True
 
-# ---------- AUTO ROLE ----------
+# ---------- ROLE AUTO SYSTEM (FIXED) ----------
 @bot.event
 async def on_member_update(before, after):
-    if before.roles == after.roles:
-        return
 
-    gid = str(after.guild.id)
-    mapping = auto_roles.get(gid, {})
+    # role mapping system
+    for role_a_id, role_b_id in role_map.get(str(after.guild.id), {}).items():
+        role_a = after.guild.get_role(int(role_a_id))
+        role_b = after.guild.get_role(int(role_b_id))
 
-    gained = {r.id for r in after.roles} - {r.id for r in before.roles}
-
-    for rid in gained:
-        if str(rid) in mapping:
-            role = after.guild.get_role(mapping[str(rid)])
-            if role and role < after.guild.me.top_role:
+        if role_a and role_b:
+            if role_a in after.roles and role_b not in after.roles:
                 try:
-                    await after.add_roles(role)
+                    await after.add_roles(role_b)
                 except:
                     pass
 
-# ---------- MAIN ----------
+# ---------- MESSAGE ----------
 @bot.event
 async def on_message(message):
 
-    if message.author.bot or not IS_LEADER:
+    if message.author.bot:
         return
 
-    now = time.time()
-
-    if message.id in message_locks and now - message_locks[message.id] < 5:
+    if not IS_LEADER:
         return
-    message_locks[message.id] = now
 
     raw = message.content
     msg = normalize_text(raw.lower())
 
-    # ---------- FILTER ----------
-    words = filtered_words.get(str(message.guild.id), DEFAULT_FILTER)
-    for w in words:
-        if w in msg:
-            try: await message.delete()
-            except: pass
-            return await safe_send(message.channel, f"{message.author.mention} watch your language")
-
-    # ---------- COMMANDS ----------
+    # ---------- COMMAND BLOCK ----------
     if msg.startswith("yen"):
 
-        def creator():
-            return message.author.id == CREATOR_ID
+        # IGNORE ROLE
+        if msg.startswith("yen ignore"):
+            if message.author.id != CREATOR_ID:
+                return await safe_send(message.channel, "only creator yen can use this")
 
-        # AUTO ROLE
-        if msg.startswith("yen add"):
-            if not creator():
-                return await safe_send(message.channel,"only the creator yen can use this")
+            if message.role_mentions:
+                r = message.role_mentions[0]
+                gid = str(message.guild.id)
 
-            if len(message.role_mentions) < 2:
+                ignored_roles.setdefault(gid, [])
+                if r.id not in ignored_roles[gid]:
+                    ignored_roles[gid].append(r.id)
+                    save_json(ignored_roles, ignore_file)
+
+            return
+
+        # UNIGNORE
+        if msg.startswith("yen unignore"):
+            if message.author.id != CREATOR_ID:
+                return await safe_send(message.channel, "only creator yen can use this")
+
+            if message.role_mentions:
+                r = message.role_mentions[0]
+                gid = str(message.guild.id)
+
+                if r.id in ignored_roles.get(gid, []):
+                    ignored_roles[gid].remove(r.id)
+                    save_json(ignored_roles, ignore_file)
+
+            return
+
+        # BAN
+        if msg.startswith("yen ban"):
+            if not message.mentions:
                 return
 
-            give = message.role_mentions[0]
-            trigger = message.role_mentions[1]
+            t = message.mentions[0]
 
-            gid = str(message.guild.id)
-            auto_roles.setdefault(gid, {})
-            auto_roles[gid][str(trigger.id)] = give.id
-            save_json(auto_roles, FILES["auto"])
+            if not can_act(message.author, t, message.guild):
+                return await safe_send(message.channel, "you aren't high enough in the role hierarchy")
 
-            members = [m for m in message.guild.members if trigger in m.roles]
-            total = len(members)
+            if not bot_can_act(t, message.guild):
+                return await safe_send(message.channel, "bot role too low")
 
-            for i,m in enumerate(members,1):
-                if give not in m.roles and give < message.guild.me.top_role:
-                    try: await m.add_roles(give)
-                    except: pass
-                if total > 5 and i % 5 == 0:
-                    await safe_send(message.channel, f"{int((i/total)*100)}%")
+            await t.ban()
+            return await safe_send(message.channel, f"{t} banned")
 
-            return await safe_send(message.channel,f"{give.name} auto added to {trigger.name}")
+        # KICK
+        if msg.startswith("yen kick"):
+            if not message.mentions:
+                return
 
-        # STRIP
+            t = message.mentions[0]
+
+            if not can_act(message.author, t, message.guild):
+                return await safe_send(message.channel, "you aren't high enough in the role hierarchy")
+
+            await t.kick()
+            return await safe_send(message.channel, f"{t} kicked")
+
+        # MUTE
+        if msg.startswith("yen mute"):
+            if not message.mentions:
+                return
+
+            t = message.mentions[0]
+
+            role = discord.utils.get(message.guild.roles, name="Muted")
+            if not role:
+                role = await message.guild.create_role(name="Muted")
+
+            await t.add_roles(role)
+            return await safe_send(message.channel, f"{t} muted")
+
+        # UNMUTE
+        if msg.startswith("yen unmute"):
+            if not message.mentions:
+                return
+
+            t = message.mentions[0]
+            role = discord.utils.get(message.guild.roles, name="Muted")
+
+            if role:
+                await t.remove_roles(role)
+
+            return await safe_send(message.channel, f"{t} unmuted")
+
+        # STRIP ROLES
         if msg == "yen strip roles":
-            if not creator():
-                return await safe_send(message.channel,"only the creator yen can use this")
+            if message.author.id != CREATOR_ID:
+                return
 
-            members = [m for m in message.guild.members if not m.bot]
-            total = len(members)
+            for m in message.guild.members:
+                if m.bot:
+                    continue
 
-            for i,m in enumerate(members,1):
-                removable = [r for r in m.roles if r != message.guild.default_role and r < message.guild.me.top_role]
-                if removable:
-                    try: await m.remove_roles(*removable)
-                    except: pass
-                if i % 5 == 0:
-                    await safe_send(message.channel,f"{int((i/total)*100)}%")
+                try:
+                    roles = [r for r in m.roles if r != message.guild.default_role]
+                    await m.remove_roles(*roles)
+                except:
+                    pass
 
-            return await safe_send(message.channel,"done stripping roles 💀")
+            return await safe_send(message.channel, "roles stripped")
+
+        # ROLE MAP SYSTEM
+        if msg.startswith("yen add"):
+            if message.author.id != CREATOR_ID:
+                return
+
+            if len(message.role_mentions) >= 2:
+                a, b = message.role_mentions[0], message.role_mentions[1]
+
+                role_map.setdefault(str(message.guild.id), {})
+                role_map[str(message.guild.id)][str(a.id)] = str(b.id)
+                save_json(role_map, role_map_file)
+
+            return await safe_send(message.channel, "role mapping added")
 
         # VERIFIED
         if msg == "yen give verified":
-            if not creator():
-                return await safe_send(message.channel,"only the creator yen can use this")
+            if message.author.id != CREATOR_ID:
+                return
 
             role = discord.utils.get(message.guild.roles, name="Verified")
             if not role:
                 role = await message.guild.create_role(name="Verified")
 
             for m in message.guild.members:
-                if not m.bot and role not in m.roles:
-                    try: await m.add_roles(role)
-                    except: pass
+                if role not in m.roles:
+                    try:
+                        await m.add_roles(role)
+                    except:
+                        pass
 
-            return await safe_send(message.channel,"everyone verified ✅")
-
-        # BAN
-        if msg.startswith("yen ban") and message.mentions:
-            t = message.mentions[0]
-
-            if not can_act(message.author,t,message.guild):
-                return await safe_send(message.channel,"you aren't high enough in the role hierarchy")
-            if not bot_can_act(t,message.guild):
-                return await safe_send(message.channel,"i can't do that")
-
-            await t.ban()
-            return await safe_send(message.channel,f"{t} banned")
-
-        # KICK
-        if msg.startswith("yen kick") and message.mentions:
-            t = message.mentions[0]
-
-            if not can_act(message.author,t,message.guild):
-                return await safe_send(message.channel,"you aren't high enough in the role hierarchy")
-            if not bot_can_act(t,message.guild):
-                return await safe_send(message.channel,"i can't do that")
-
-            await t.kick()
-            return await safe_send(message.channel,f"{t} kicked")
-
-        # MUTE
-        if msg.startswith("yen mute") and message.mentions:
-            t = message.mentions[0]
-
-            role = discord.utils.get(message.guild.roles,name="Muted")
-            if not role:
-                role = await message.guild.create_role(name="Muted")
-
-            await t.add_roles(role)
-            return await safe_send(message.channel,f"{t} muted")
-
-        # UNMUTE
-        if msg.startswith("yen unmute") and message.mentions:
-            t = message.mentions[0]
-            role = discord.utils.get(message.guild.roles,name="Muted")
-            if role:
-                await t.remove_roles(role)
-            return await safe_send(message.channel,f"{t} unmuted")
+            return await safe_send(message.channel, "verified given")
 
         # HELP
         if msg == "yen commands":
             cmds = [
-                "yen add @role to @role",
-                "yen strip roles",
-                "yen give verified",
                 "yen ban @user",
                 "yen kick @user",
                 "yen mute @user",
-                "yen unmute @user"
+                "yen unmute @user",
+                "yen ignore @role",
+                "yen unignore @role",
+                "yen strip roles",
+                "yen give verified",
+                "yen add @role @role"
             ]
+
             view = HelpView(message.author, cmds)
             return await message.channel.send(embed=view.get_embed(), view=view)
 
@@ -304,15 +321,7 @@ async def on_message(message):
     if not msg.startswith("hey yen"):
         return
 
-    uid = str(message.author.id)
-
-    if uid in user_cooldowns and now - user_cooldowns[uid] < 3:
-        return
-
-    user_cooldowns[uid] = now
-
-    await asyncio.sleep(random.uniform(0.3,0.7))
-    await message.reply(simple_ai(raw), allowed_mentions=SAFE_MENTIONS)
+    await message.reply(simple_ai(raw))
 
 # ---------- RUN ----------
 bot.run(TOKEN)
