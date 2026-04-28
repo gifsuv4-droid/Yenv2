@@ -17,7 +17,10 @@ SAFE = discord.AllowedMentions(everyone=False, roles=False, users=True)
 CREATOR_ID = 1383111113016872980
 LOCK_CHANNEL_ID = 1446191246828634223
 
-# ================= SAFE FILE SYSTEM =================
+# ================= LOCK SYSTEM =================
+IS_LEADER = False
+
+# ================= FILE SYSTEM =================
 FILES = {
     "auto": "auto_roles.json",
     "filter": "filters.json",
@@ -27,15 +30,13 @@ FILES = {
 
 def load(f):
     try:
-        with open(f, "r") as x:
-            return json.load(x)
+        return json.load(open(f, "r"))
     except:
         return {}
 
 def save(f, d):
     try:
-        with open(f, "w") as x:
-            json.dump(d, x, indent=2)
+        json.dump(d, open(f, "w"), indent=2)
     except:
         pass
 
@@ -47,9 +48,7 @@ logs = load(FILES["logs"])
 # ================= STATE =================
 msg_lock = set()
 cooldowns = {}
-
-# prevents memory leak (auto cleanup)
-MAX_LOCK_SIZE = 2500
+MAX_LOCK = 2500
 
 # ================= UTIL =================
 def norm(t):
@@ -64,27 +63,19 @@ def log(guild, text):
     logs[gid] = logs[gid][-20:]
     save(FILES["logs"], logs)
 
-async def safe_send(ch, msg):
-    try:
-        return await ch.send(msg, allowed_mentions=SAFE)
-    except:
-        return
-
 # ================= SECURITY CORE =================
 def secure(msg):
     if not msg or not msg.guild:
         return False
-
     if msg.author.bot:
         return False
 
-    # duplicate message protection
     if msg.id in msg_lock:
         return False
 
     msg_lock.add(msg.id)
 
-    if len(msg_lock) > MAX_LOCK_SIZE:
+    if len(msg_lock) > MAX_LOCK:
         msg_lock.clear()
 
     return True
@@ -95,17 +86,16 @@ def is_creator(u):
 def can_act(a, t):
     if not a or not t:
         return False
-    if is_creator(a):
-        return True
-    return a.top_role > t.top_role
+    return is_creator(a) or a.top_role > t.top_role
 
 def bot_can(t, g):
-    if not g or not t:
-        return False
-    return g.me.top_role > t.top_role
+    return g and g.me and g.me.top_role > t.top_role
 
 # ================= GROQ AI =================
 def ask_ai(uid, text):
+    if not GROQ_KEY:
+        return "AI not configured"
+
     history = memory.get(str(uid), [])[-6:]
 
     messages = [{"role": "system", "content": "short chaotic assistant max 40 tokens"}]
@@ -127,7 +117,6 @@ def ask_ai(uid, text):
             },
             timeout=10
         )
-
         return r.json()["choices"][0]["message"]["content"]
 
     except:
@@ -142,18 +131,18 @@ class Dashboard(discord.ui.View):
 
     def embed(self, g):
 
-        ai = "🟢 ONLINE" if GROQ_KEY else "🔴 OFFLINE"
+        ai_status = "🟢 ONLINE" if GROQ_KEY else "🔴 OFFLINE"
 
         e = discord.Embed(
-            title="🟣 YEN CONTROL CORE V9.1",
+            title="🟣 YEN CONTROL CORE V9.3",
             description="```NEON SYSTEM STABLE BUILD```",
             color=discord.Color.purple()
         )
 
         if self.page == "home":
-            e.add_field(name="AI", value=ai, inline=True)
+            e.add_field(name="AI", value=ai_status, inline=True)
             e.add_field(name="Servers", value=len(bot.guilds), inline=True)
-            e.add_field(name="Memory", value=len(memory), inline=True)
+            e.add_field(name="Memory Users", value=len(memory), inline=True)
 
         elif self.page == "moderation":
             e.add_field(
@@ -163,10 +152,12 @@ class Dashboard(discord.ui.View):
             )
 
         elif self.page == "logs":
-            e.description = "\n".join(logs.get(str(g.id), [])[-8:]) or "No logs"
+            logs_data = logs.get(str(g.id), [])[-8:]
+            e.description = "\n".join(logs_data) if logs_data else "No logs"
 
         return e
 
+    # NAV
     @discord.ui.button(label="HOME")
     async def home(self, i, b):
         self.page = "home"
@@ -182,7 +173,7 @@ class Dashboard(discord.ui.View):
         self.page = "logs"
         await i.response.edit_message(embed=self.embed(i.guild), view=self)
 
-    # SAFE MODERATION BUTTONS
+    # SAFE MOD ACTIONS
     @discord.ui.button(label="BAN")
     async def ban(self, i, b):
 
@@ -221,19 +212,27 @@ class Dashboard(discord.ui.View):
         except:
             await i.response.send_message("failed", ephemeral=True)
 
-# ================= READY =================
+# ================= READY (LOCK SYSTEM) =================
 @bot.event
 async def on_ready():
 
+    global IS_LEADER
     ch = bot.get_channel(LOCK_CHANNEL_ID)
 
     if ch:
-        await ch.send("🔐 LOCK IN, YEN V9.1 HYBRID ONLINE")
-        await ch.send(embed=discord.Embed(
-            title="SYSTEM READY",
-            description="AI + DASHBOARD + MODERATION ACTIVE",
-            color=discord.Color.purple()
-        ), view=Dashboard())
+        await ch.send("🔐 SYSTEM BOOTING...")
+
+        await asyncio.sleep(1)
+        await ch.send("🧠 AI CORE INITIALIZED")
+
+        await asyncio.sleep(1)
+        await ch.send("⚙️ MODULE CHECK COMPLETE")
+
+        await asyncio.sleep(1)
+
+        IS_LEADER = True
+
+        await ch.send("🔐 LOCK IN COMPLETE — YEN V9.3 ONLINE")
 
 # ================= MESSAGE =================
 @bot.event
@@ -242,9 +241,12 @@ async def on_message(message):
     if not secure(message):
         return
 
+    if not IS_LEADER:
+        return
+
     msg = norm(message.content.lower())
 
-    # FILTER SYSTEM
+    # FILTER
     bad = filters.get(str(message.guild.id), [])
 
     for w in bad:
@@ -256,7 +258,7 @@ async def on_message(message):
             log(message.guild, f"FILTER {message.author}")
             return await message.channel.send("blocked ⚠️")
 
-    # AI SYSTEM
+    # AI
     if msg.startswith("hey yen"):
 
         uid = str(message.author.id)
@@ -288,7 +290,7 @@ async def dashboard(ctx, user: discord.Member = None):
     view = Dashboard()
     view.target_user = user
 
-    await ctx.send(embed=view.embed(ctx.guild), view=view)
+    await ctx.send("🟣 CONTROL PANEL OPENED", view=view)
 
 # ================= RUN =================
 bot.run(TOKEN)
