@@ -63,7 +63,7 @@ def log(guild, text):
     logs[gid] = logs[gid][-20:]
     save(FILES["logs"], logs)
 
-# ================= SECURITY CORE =================
+# ================= SECURITY =================
 def secure(msg):
     if not msg or not msg.guild:
         return False
@@ -85,18 +85,15 @@ def can_act(a, t):
         return False
     return a.guild_permissions.administrator or a.top_role > t.top_role
 
-# ================= GROQ AI (SAFE + DEBUG) =================
+# ================= GROQ AI =================
 def ask_ai(uid, text):
     if not GROQ_KEY:
         return "AI not configured"
 
     history = memory.get(str(uid), [])[-6:]
 
-    messages = [
-        {"role": "system", "content": "short chaotic assistant max 40 tokens"}
-    ]
+    messages = [{"role": "system", "content": "You are Yen, a helpful Discord bot. Keep replies short."}]
 
-    # Safe memory format
     if history:
         messages.append({
             "role": "user",
@@ -105,22 +102,19 @@ def ask_ai(uid, text):
 
     messages.append({"role": "user", "content": text})
 
-    messages = messages[:10]
-
     try:
         r = requests.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}"},
             json={
-                "model": "llama-3.1-8b-instant",  # budget + stable
+                "model": "llama-3.1-8b-instant",
                 "messages": messages,
-                "max_tokens": 50,  # cheap + enough
+                "max_tokens": 50,
                 "temperature": 0.8
             },
             timeout=10
         )
 
-        # ✅ SAFE DEBUG (won't crash)
         print("STATUS:", r.status_code)
         print("RESPONSE:", r.text)
 
@@ -148,6 +142,9 @@ async def on_message(message):
 
     if not secure(message):
         return
+
+    # ✅ ALLOW COMMANDS FIRST
+    await bot.process_commands(message)
 
     if not IS_LEADER:
         return
@@ -186,12 +183,9 @@ async def on_message(message):
 
         return await message.reply(reply, allowed_mentions=SAFE)
 
-    await bot.process_commands(message)
-
 # ================= READY =================
 @bot.event
 async def on_ready():
-
     global IS_LEADER
     ch = bot.get_channel(LOCK_CHANNEL_ID)
 
@@ -204,7 +198,6 @@ async def on_ready():
         await asyncio.sleep(1)
 
         IS_LEADER = True
-
         await ch.send("LOCK IN COMPLETE — YEN V9.3 ONLINE")
 
 # ================= DASHBOARD =================
@@ -215,25 +208,72 @@ class Dashboard(discord.ui.View):
         self.target_user = None
 
     def embed(self, g):
-
         ai_status = "🟢 ONLINE" if GROQ_KEY else "🔴 OFFLINE"
 
         e = discord.Embed(
-            title="CONTROL CORE V9.3 ONLINE",
-            description="```NEON SYSTEM STABLE BUILD```",
+            title="CONTROL CORE V9.3",
+            description="```NEON SYSTEM```",
             color=discord.Color.purple()
         )
 
         if self.page == "home":
-            e.add_field(name="AI", value=ai_status, inline=True)
-            e.add_field(name="Servers", value=len(bot.guilds), inline=True)
-            e.add_field(name="Memory Users", value=len(memory), inline=True)
+            e.add_field(name="AI", value=ai_status)
+            e.add_field(name="Servers", value=len(bot.guilds))
+            e.add_field(name="Memory Users", value=len(memory))
+
+        elif self.page == "moderation":
+            e.add_field(name="Target User", value=str(self.target_user) if self.target_user else "None")
 
         elif self.page == "logs":
             logs_data = logs.get(str(g.id), [])[-8:] if g else []
             e.description = "\n".join(logs_data) if logs_data else "No logs"
 
         return e
+
+    @discord.ui.button(label="HOME")
+    async def home(self, i: discord.Interaction, button: discord.ui.Button):
+        self.page = "home"
+        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+
+    @discord.ui.button(label="MOD")
+    async def mod(self, i: discord.Interaction, button: discord.ui.Button):
+        self.page = "moderation"
+        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+
+    @discord.ui.button(label="LOGS")
+    async def logs_btn(self, i: discord.Interaction, button: discord.ui.Button):
+        self.page = "logs"
+        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+
+    @discord.ui.button(label="BAN")
+    async def ban(self, i: discord.Interaction, button: discord.ui.Button):
+        if not self.target_user:
+            return await i.response.send_message("no user selected", ephemeral=True)
+        try:
+            await self.target_user.ban()
+            log(i.guild, f"BAN {self.target_user}")
+            await i.response.send_message("banned", ephemeral=True)
+        except:
+            await i.response.send_message("failed", ephemeral=True)
+
+    @discord.ui.button(label="KICK")
+    async def kick(self, i: discord.Interaction, button: discord.ui.Button):
+        if not self.target_user:
+            return await i.response.send_message("no user selected", ephemeral=True)
+        try:
+            await self.target_user.kick()
+            log(i.guild, f"KICK {self.target_user}")
+            await i.response.send_message("kicked", ephemeral=True)
+        except:
+            await i.response.send_message("failed", ephemeral=True)
+
+# ================= COMMAND =================
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def dashboard(ctx, user: discord.Member = None):
+    view = Dashboard()
+    view.target_user = user
+    await ctx.send("CONTROL PANEL OPENED", view=view)
 
 # ================= RUN =================
 bot.run(TOKEN)
