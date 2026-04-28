@@ -1,280 +1,294 @@
 import discord
 from discord.ext import commands
-import os, json, time, random, asyncio, unicodedata, math
+import os, json, time, asyncio, requests, unicodedata
 
-# ---------- ENV ----------
+# ================= CONFIG =================
 TOKEN = os.getenv("TOKEN")
+GROQ_KEY = os.getenv("GROQ_KEY")
+
 if not TOKEN:
     raise ValueError("Missing TOKEN")
 
-# ---------- BOT ----------
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="", intents=intents)
+bot = commands.Bot(command_prefix="yen ", intents=intents)
+
 SAFE = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
 CREATOR_ID = 1383111113016872980
 LOCK_CHANNEL_ID = 1446191246828634223
-IS_LEADER = False
 
-# ---------- FILES ----------
-slime_file = "slimed.json"
-ignore_file = "ignore_roles.json"
-auto_file = "auto_roles.json"
-filter_file = "filter.json"
+# ================= SAFE FILE SYSTEM =================
+FILES = {
+    "auto": "auto_roles.json",
+    "filter": "filters.json",
+    "memory": "memory.json",
+    "logs": "logs.json"
+}
 
 def load(f):
-    if os.path.exists(f):
-        return json.load(open(f))
-    return {}
-
-def save(d,f):
-    json.dump(d, open(f,"w"), indent=2)
-
-slimed_users = load(slime_file)
-ignored_roles = load(ignore_file)
-auto_roles = load(auto_file)
-filtered_words = load(filter_file)
-
-DEFAULT_FILTER = ["badword1", "badword2"]
-
-# ---------- STATE (BULLETPROOF LAYERS) ----------
-conversation_memory = {}
-user_cooldowns = {}
-message_locks = set()
-
-# ---------- UTIL ----------
-def norm(t):
-    return unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode()
-
-async def safe(ch, msg):
     try:
-        return await ch.send(msg, allowed_mentions=SAFE)
+        with open(f, "r") as x:
+            return json.load(x)
+    except:
+        return {}
+
+def save(f, d):
+    try:
+        with open(f, "w") as x:
+            json.dump(d, x, indent=2)
     except:
         pass
 
-def fancy(t):
-    a="abcdefghijklmnopqrstuvwxyz0123456789"
-    b="𝚊𝚋𝚌𝚍𝚎𝚏𝚐𝚑𝚒𝚓𝚔𝚕𝚖𝚗𝚘𝚙𝚚𝚛𝚜𝚝𝚞𝚟𝚠𝚡𝚢𝚣0123456789"
-    return t.lower().translate(str.maketrans(a,b))
+auto_roles = load(FILES["auto"])
+filters = load(FILES["filter"])
+memory = load(FILES["memory"])
+logs = load(FILES["logs"])
 
-# ---------- ROLE ENGINE ----------
-def creator(m): return m.author.id == CREATOR_ID
+# ================= STATE =================
+msg_lock = set()
+cooldowns = {}
 
-def top(m): return m.top_role
+# prevents memory leak (auto cleanup)
+MAX_LOCK_SIZE = 2500
 
-def can(m,t):
-    return creator(m) or top(m) > top(t)
+# ================= UTIL =================
+def norm(t):
+    return unicodedata.normalize("NFKD", t).encode("ascii","ignore").decode()
 
-def bot_can(t,g):
+def log(guild, text):
+    if not guild:
+        return
+    gid = str(guild.id)
+    logs.setdefault(gid, [])
+    logs[gid].append(f"{time.strftime('%H:%M:%S')} | {text}")
+    logs[gid] = logs[gid][-20:]
+    save(FILES["logs"], logs)
+
+async def safe_send(ch, msg):
+    try:
+        return await ch.send(msg, allowed_mentions=SAFE)
+    except:
+        return
+
+# ================= SECURITY CORE =================
+def secure(msg):
+    if not msg or not msg.guild:
+        return False
+
+    if msg.author.bot:
+        return False
+
+    # duplicate message protection
+    if msg.id in msg_lock:
+        return False
+
+    msg_lock.add(msg.id)
+
+    if len(msg_lock) > MAX_LOCK_SIZE:
+        msg_lock.clear()
+
+    return True
+
+def is_creator(u):
+    return u and u.id == CREATOR_ID
+
+def can_act(a, t):
+    if not a or not t:
+        return False
+    if is_creator(a):
+        return True
+    return a.top_role > t.top_role
+
+def bot_can(t, g):
+    if not g or not t:
+        return False
     return g.me.top_role > t.top_role
 
-# ---------- SMART AI (RESTORED + MEMORY) ----------
-def smart_ai(user_id, text):
+# ================= GROQ AI =================
+def ask_ai(uid, text):
+    history = memory.get(str(uid), [])[-6:]
 
-    history = conversation_memory.get(user_id, [])
+    messages = [{"role": "system", "content": "short chaotic assistant max 40 tokens"}]
 
-    system_style = "short chaotic reply"
-    if any(x in text.lower() for x in ["what","why","how","help"]):
-        system_style = "short helpful answer"
+    for h in history:
+        messages.append({"role": "user", "content": h})
 
-    context = " ".join(history[-6:])
-
-    prompt = f"{system_style}\ncontext:{context}\nuser:{text}"
+    messages.append({"role": "user", "content": text})
 
     try:
-        reply = random.choice([
-            "nah 💀",
-            "skill issue",
-            "you good?",
-            "mid take",
-            "ain't no way",
-            "bro what 😭"
-        ])
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_KEY}"},
+            json={
+                "model": "llama3-70b-8192",
+                "messages": messages,
+                "max_tokens": 40,
+                "temperature": 0.8
+            },
+            timeout=10
+        )
+
+        return r.json()["choices"][0]["message"]["content"]
+
     except:
-        reply = "error brain lag"
+        return "AI offline 💀"
 
-    return reply
+# ================= DASHBOARD =================
+class Dashboard(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        self.page = "home"
+        self.target_user = None
 
-# ---------- HELP PANEL (FUTURISTIC UI) ----------
-class HelpView(discord.ui.View):
-    def __init__(self, user, cmds):
-        super().__init__(timeout=60)
-        self.user = user
-        self.cmds = cmds
-        self.page = 0
-        self.per = 6
-        self.pages = math.ceil(len(cmds)/self.per)
+    def embed(self, g):
 
-    def get_embed(self):
-        chunk = self.cmds[self.page*self.per:(self.page+1)*self.per]
+        ai = "🟢 ONLINE" if GROQ_KEY else "🔴 OFFLINE"
 
-        return discord.Embed(
-            title=fancy(f"▰ Y E N  C O N S O L E ▰ ({self.page+1}/{self.pages})"),
-            description="\n".join(fancy(c) for c in chunk),
+        e = discord.Embed(
+            title="🟣 YEN CONTROL CORE V9.1",
+            description="```NEON SYSTEM STABLE BUILD```",
             color=discord.Color.purple()
         )
 
-    async def interaction_check(self, i):
-        return i.user == self.user
+        if self.page == "home":
+            e.add_field(name="AI", value=ai, inline=True)
+            e.add_field(name="Servers", value=len(bot.guilds), inline=True)
+            e.add_field(name="Memory", value=len(memory), inline=True)
 
-    @discord.ui.button(label="⟵")
-    async def prev(self, i, b):
-        self.page = (self.page - 1) % self.pages
-        await i.response.edit_message(embed=self.get_embed(), view=self)
+        elif self.page == "moderation":
+            e.add_field(
+                name="Target User",
+                value=str(self.target_user) if self.target_user else "None selected",
+                inline=False
+            )
 
-    @discord.ui.button(label="⟶")
-    async def next(self, i, b):
-        self.page = (self.page + 1) % self.pages
-        await i.response.edit_message(embed=self.get_embed(), view=self)
+        elif self.page == "logs":
+            e.description = "\n".join(logs.get(str(g.id), [])[-8:]) or "No logs"
 
-# ---------- READY ----------
+        return e
+
+    @discord.ui.button(label="HOME")
+    async def home(self, i, b):
+        self.page = "home"
+        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+
+    @discord.ui.button(label="MOD")
+    async def mod(self, i, b):
+        self.page = "moderation"
+        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+
+    @discord.ui.button(label="LOGS")
+    async def logs_btn(self, i, b):
+        self.page = "logs"
+        await i.response.edit_message(embed=self.embed(i.guild), view=self)
+
+    # SAFE MODERATION BUTTONS
+    @discord.ui.button(label="BAN")
+    async def ban(self, i, b):
+
+        if not i.user.guild_permissions.administrator:
+            return await i.response.send_message("no permission", ephemeral=True)
+
+        if not self.target_user:
+            return await i.response.send_message("no user selected", ephemeral=True)
+
+        if not can_act(i.user, self.target_user):
+            return await i.response.send_message("role too low", ephemeral=True)
+
+        try:
+            await self.target_user.ban()
+            log(i.guild, f"BAN {self.target_user}")
+            await i.response.send_message("banned", ephemeral=True)
+        except:
+            await i.response.send_message("failed", ephemeral=True)
+
+    @discord.ui.button(label="KICK")
+    async def kick(self, i, b):
+
+        if not i.user.guild_permissions.administrator:
+            return await i.response.send_message("no permission", ephemeral=True)
+
+        if not self.target_user:
+            return await i.response.send_message("no user selected", ephemeral=True)
+
+        if not can_act(i.user, self.target_user):
+            return await i.response.send_message("role too low", ephemeral=True)
+
+        try:
+            await self.target_user.kick()
+            log(i.guild, f"KICK {self.target_user}")
+            await i.response.send_message("kicked", ephemeral=True)
+        except:
+            await i.response.send_message("failed", ephemeral=True)
+
+# ================= READY =================
 @bot.event
 async def on_ready():
-    global IS_LEADER
+
     ch = bot.get_channel(LOCK_CHANNEL_ID)
+
     if ch:
-        await ch.send("LOCK IN, SYSTEM UPDATED, NEW VERSION EXECUTING")
-    IS_LEADER = True
+        await ch.send("🔐 LOCK IN, YEN V9.1 HYBRID ONLINE")
+        await ch.send(embed=discord.Embed(
+            title="SYSTEM READY",
+            description="AI + DASHBOARD + MODERATION ACTIVE",
+            color=discord.Color.purple()
+        ), view=Dashboard())
 
-# ---------- AUTO ROLE ENGINE ----------
-@bot.event
-async def on_member_update(before, after):
-
-    if before.roles == after.roles:
-        return
-
-    gid = str(after.guild.id)
-    mapping = auto_roles.get(gid, {})
-
-    gained = {r.id for r in after.roles} - {r.id for r in before.roles}
-
-    for r in gained:
-        if str(r) in mapping:
-            role = after.guild.get_role(mapping[str(r)])
-            if role and role < after.guild.me.top_role:
-                try:
-                    await after.add_roles(role)
-                except:
-                    pass
-
-# ---------- MAIN ----------
+# ================= MESSAGE =================
 @bot.event
 async def on_message(message):
 
-    if message.author.bot or not IS_LEADER:
+    if not secure(message):
         return
 
-    # DOUBLE MESSAGE PROTECTION
-    if message.id in message_locks:
-        return
-    message_locks.add(message.id)
+    msg = norm(message.content.lower())
 
-    raw = message.content
-    msg = norm(raw.lower())
+    # FILTER SYSTEM
+    bad = filters.get(str(message.guild.id), [])
 
-    # ---------- FILTER ----------
-    words = filtered_words.get(str(message.guild.id), DEFAULT_FILTER)
-
-    for w in words:
+    for w in bad:
         if w in msg:
-            try: await message.delete()
-            except: pass
-            return await safe(message.channel,"watch your language")
+            try:
+                await message.delete()
+            except:
+                pass
+            log(message.guild, f"FILTER {message.author}")
+            return await message.channel.send("blocked ⚠️")
 
-    # ---------- COMMANDS ----------
-    if msg.startswith("yen"):
+    # AI SYSTEM
+    if msg.startswith("hey yen"):
 
-        def creator_only(): return message.author.id == CREATOR_ID
+        uid = str(message.author.id)
 
-        # AUTO ROLE
-        if msg.startswith("yen add"):
-            if not creator_only():
-                return await safe(message.channel,"only creator yen can use this")
+        memory.setdefault(uid, [])
+        memory[uid].append(message.content)
+        memory[uid] = memory[uid][-6:]
 
-            if len(message.role_mentions) < 2:
-                return await safe(message.channel,"use @give @trigger")
+        save(FILES["memory"], memory)
 
-            give, trigger = message.role_mentions[:2]
+        if uid in cooldowns and time.time() - cooldowns[uid] < 2:
+            return
 
-            gid = str(message.guild.id)
-            auto_roles.setdefault(gid, {})
-            auto_roles[gid][str(trigger.id)] = give.id
-            save(auto_roles, auto_file)
+        cooldowns[uid] = time.time()
 
-            members = [m for m in message.guild.members if trigger in m.roles]
+        reply = ask_ai(uid, message.content)
 
-            for m in members:
-                if give not in m.roles and give < message.guild.me.top_role:
-                    try: await m.add_roles(give)
-                    except: pass
+        log(message.guild, f"AI {message.author}")
 
-            return await safe(message.channel,"auto role mapped")
+        return await message.reply(reply, allowed_mentions=SAFE)
 
-        # STRIP
-        if msg == "yen strip roles":
-            if not creator_only():
-                return await safe(message.channel,"only creator yen can use this")
+    await bot.process_commands(message)
 
-            for m in message.guild.members:
-                if not m.bot:
-                    try:
-                        await m.remove_roles(*m.roles[1:])
-                    except:
-                        pass
+# ================= DASHBOARD COMMAND =================
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def dashboard(ctx, user: discord.Member = None):
 
-            return await safe(message.channel,"roles stripped")
+    view = Dashboard()
+    view.target_user = user
 
-        # VERIFIED
-        if msg == "yen give verified":
-            if not creator_only():
-                return await safe(message.channel,"only creator yen can use this")
+    await ctx.send(embed=view.embed(ctx.guild), view=view)
 
-            role = discord.utils.get(message.guild.roles,name="Verified")
-            if not role:
-                role = await message.guild.create_role(name="Verified")
-
-            for m in message.guild.members:
-                try: await m.add_roles(role)
-                except: pass
-
-            return await safe(message.channel,"verified given")
-
-        # HELP (FUTURISTIC LIST)
-        if msg == "yen commands":
-            cmds = [
-                "yen add @role @role",
-                "yen strip roles",
-                "yen give verified",
-                "yen ban @user",
-                "yen kick @user",
-                "yen mute @user",
-                "yen unmute @user",
-                "yen slime @user",
-                "yen restore @user"
-            ]
-            return await message.channel.send(embed=HelpView(message.author,cmds).get_embed(),
-                                               view=HelpView(message.author,cmds))
-
-        return
-
-    # ---------- AI SYSTEM ----------
-    if not msg.startswith("hey yen"):
-        return
-
-    uid = str(message.author.id)
-
-    if uid in user_cooldowns and time.time() - user_cooldowns[uid] < 3:
-        return
-
-    user_cooldowns[uid] = time.time()
-
-    reply = smart_ai(uid, raw)
-
-    conversation_memory.setdefault(uid, []).append(raw)
-    conversation_memory[uid] = conversation_memory[uid][-6:]
-
-    await asyncio.sleep(random.uniform(0.3,0.7))
-    await message.reply(reply, allowed_mentions=SAFE)
-
-# ---------- RUN ----------
+# ================= RUN =================
 bot.run(TOKEN)
