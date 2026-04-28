@@ -1,6 +1,6 @@
 import discord
 from discord.ext import commands
-import os, json, time, random, asyncio, unicodedata
+import os, json, time, random, asyncio, unicodedata, math
 from groq import Groq
 
 # ---------- ENV ----------
@@ -55,8 +55,24 @@ ignored_roles = load_json(ignore_file)
 
 # ---------- SAFE SEND ----------
 async def safe_send(channel, content=None, embed=None, ref=None):
+
+    async for m in channel.history(limit=10):
+        if m.author != bot.user:
+            continue
+
+        if content and m.content == content:
+            return
+
+        if embed and m.embeds:
+            try:
+                if m.embeds[0].title == embed.title:
+                    return
+            except:
+                pass
+
     if ref:
         return await ref.reply(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
+
     return await channel.send(content, embed=embed, allowed_mentions=SAFE_MENTIONS)
 
 # ---------- HELPERS ----------
@@ -79,36 +95,40 @@ def can_act(author, target, guild):
 def bot_can_act(target, guild):
     return guild.me.top_role > get_effective_top_role(target, guild)
 
-# ---------- AI ----------
-def is_serious(text):
-    return any(k in text.lower() for k in ["what","why","how","help","explain"])
+# ---------- HELP UI ----------
+class HelpView(discord.ui.View):
+    def __init__(self, user, cmds):
+        super().__init__(timeout=60)
+        self.user = user
+        self.cmds = cmds
+        self.page = 0
+        self.per_page = 5
+        self.total_pages = math.ceil(len(cmds) / self.per_page)
 
-def ask_ai(prompt, uid):
-    history = conversation_memory.get(uid, [])
+    def get_embed(self):
+        start = self.page * self.per_page
+        end = start + self.per_page
+        chunk = self.cmds[start:end]
 
-    system_prompt = (
-        "Short helpful answer. 1 sentence."
-        if is_serious(prompt)
-        else "Reply like a TikTok comment: rude, chaotic, 1 line."
-    )
-
-    messages = [{"role": "system", "content": system_prompt}]
-
-    for i, msg in enumerate(history[-MEMORY_LIMIT:]):
-        role = "user" if i % 2 == 0 else "assistant"
-        messages.append({"role": role, "content": msg})
-
-    messages.append({"role": "user", "content": prompt})
-
-    try:
-        res = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=messages,
-            max_tokens=60
+        embed = discord.Embed(
+            title=fancy(f"Yen Commands ({self.page+1}/{self.total_pages})"),
+            description="\n".join(fancy(c) for c in chunk),
+            color=discord.Color.purple()
         )
-        return res.choices[0].message.content.strip().split("\n")[0][:120]
-    except:
-        return "brain lag"
+        return embed
+
+    async def interaction_check(self, interaction):
+        return interaction.user == self.user
+
+    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary)
+    async def prev(self, interaction, button):
+        self.page = (self.page - 1) % self.total_pages
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
+
+    @discord.ui.button(label="➡️", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction, button):
+        self.page = (self.page + 1) % self.total_pages
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
 # ---------- READY ----------
 @bot.event
@@ -140,10 +160,6 @@ async def on_message(message):
         return
     message_locks[message.id] = now
 
-    for k in list(message_locks.keys()):
-        if now - message_locks[k] > 10:
-            del message_locks[k]
-
     raw = message.content
     msg = normalize_text(raw.lower())
 
@@ -153,160 +169,9 @@ async def on_message(message):
         def creator_only():
             return message.author.id == CREATOR_ID
 
-        # ---------- SLIME ----------
-        if msg.startswith("yen slime"):
-            if not creator_only():
-                await safe_send(message.channel, "only the creator yen can use this")
-                return
-            if not message.mentions:
-                return
-
-            t = message.mentions[0]
-
-            role = discord.utils.get(message.guild.roles, name="SLIMED")
-            if not role:
-                role = await message.guild.create_role(name="SLIMED")
-
-            slimed_users[str(t.id)] = {
-                "roles": [r.id for r in t.roles if r != message.guild.default_role],
-                "nickname": t.nick
-            }
-            save_json(slimed_users, slime_file)
-
-            removable = [r for r in t.roles if r != message.guild.default_role and r < message.guild.me.top_role]
-            if removable:
-                await t.remove_roles(*removable)
-
-            await t.add_roles(role)
-
-            try:
-                await t.edit(nick="*SLIMED*")
-            except:
-                pass
-
-            await safe_send(message.channel, f"{t.mention} got slimed 🟢")
-            return
-
-        # ---------- RESTORE ----------
-        if msg.startswith("yen restore"):
-            if not creator_only():
-                await safe_send(message.channel, "only the creator yen can use this")
-                return
-            if not message.mentions:
-                return
-
-            t = message.mentions[0]
-            data = slimed_users.get(str(t.id))
-
-            if not data:
-                return
-
-            roles = [message.guild.get_role(r) for r in data["roles"] if message.guild.get_role(r)]
-
-            if roles:
-                await t.add_roles(*roles)
-
-            role = discord.utils.get(message.guild.roles, name="SLIMED")
-            if role:
-                await t.remove_roles(role)
-
-            try:
-                await t.edit(nick=data["nickname"])
-            except:
-                pass
-
-            del slimed_users[str(t.id)]
-            save_json(slimed_users, slime_file)
-
-            await safe_send(message.channel, f"{t.mention} restored")
-            return
-
-        # ---------- IGNORE ----------
-        if msg.startswith("yen ignore"):
-            if not creator_only():
-                await safe_send(message.channel, "only the creator yen can use this")
-                return
-            if not message.role_mentions:
-                return
-
-            role = message.role_mentions[0]
-            gid = str(message.guild.id)
-
-            ignored_roles.setdefault(gid, [])
-            if role.id not in ignored_roles[gid]:
-                ignored_roles[gid].append(role.id)
-                save_json(ignored_roles, ignore_file)
-                await safe_send(message.channel, f"now ignoring {role.name}")
-            return
-
-        # ---------- UNIGNORE ----------
-        if msg.startswith("yen unignore"):
-            if not creator_only():
-                await safe_send(message.channel, "only the creator yen can use this")
-                return
-            if not message.role_mentions:
-                return
-
-            role = message.role_mentions[0]
-            gid = str(message.guild.id)
-
-            if role.id in ignored_roles.get(gid, []):
-                ignored_roles[gid].remove(role.id)
-                save_json(ignored_roles, ignore_file)
-                await safe_send(message.channel, f"stopped ignoring {role.name}")
-            return
-
-        # ---------- STRIP ROLES ----------
-        if msg == "yen strip roles":
-            if not creator_only():
-                await safe_send(message.channel, "only the creator yen can use this")
-                return
-
-            members = [m for m in message.guild.members if not m.bot]
-            total = len(members)
-
-            for i, m in enumerate(members, 1):
-                removable = [r for r in m.roles if r != message.guild.default_role and r < message.guild.me.top_role]
-                if removable:
-                    try:
-                        await m.remove_roles(*removable)
-                    except:
-                        pass
-
-                if i % 5 == 0:
-                    await safe_send(message.channel, f"{int((i/total)*100)}%")
-
-            await safe_send(message.channel, "done stripping roles 💀")
-            return
-
-        # ---------- GIVE VERIFIED ----------
-        if msg == "yen give verified":
-            if not creator_only():
-                await safe_send(message.channel, "only the creator yen can use this")
-                return
-
-            role = discord.utils.get(message.guild.roles, name="Verified")
-            if not role:
-                role = await message.guild.create_role(name="Verified")
-
-            members = [m for m in message.guild.members if not m.bot]
-            total = len(members)
-
-            for i, m in enumerate(members, 1):
-                if role not in m.roles:
-                    try:
-                        await m.add_roles(role)
-                    except:
-                        pass
-
-                if i % 5 == 0:
-                    await safe_send(message.channel, f"{int((i/total)*100)}%")
-
-            await safe_send(message.channel, "everyone verified ✅")
-            return
-
         # ---------- HELP ----------
         if msg == "yen commands":
+
             cmds = [
                 "yen ban @user",
                 "yen kick @user",
@@ -321,16 +186,25 @@ async def on_message(message):
                 "yen restore @user"
             ]
 
-            embed = discord.Embed(
-                title=fancy("Yen Commands"),
-                description="\n".join(fancy(c) for c in cmds),
-                color=discord.Color.purple()
-            )
+            # delete old help embeds
+            async for m in message.channel.history(limit=10):
+                if m.author == bot.user and m.embeds:
+                    try:
+                        if "yen commands" in m.embeds[0].title.lower():
+                            await m.delete()
+                    except:
+                        pass
 
-            await safe_send(message.channel, embed=embed)
+            view = HelpView(message.author, cmds)
+
+            # slight delay = "animated feel"
+            msg_obj = await message.channel.send("loading commands...")
+            await asyncio.sleep(0.4)
+            await msg_obj.edit(content=None, embed=view.get_embed(), view=view)
+
             return
 
-        return
+        return  # stops AI from triggering on commands
 
 # ---------- AI ----------
     if not (msg.startswith("hey yen") or random.randint(1,50) == 1):
@@ -343,15 +217,7 @@ async def on_message(message):
 
     user_cooldowns[uid] = now
 
-    clean = normalize_text(raw).lower().replace("hey yen", "", 1).strip()
-    reply = ask_ai(clean, uid)
-
-    conversation_memory.setdefault(uid, []).append(clean)
-    conversation_memory[uid].append(reply)
-    conversation_memory[uid] = conversation_memory[uid][-MEMORY_LIMIT:]
-
-    await asyncio.sleep(random.uniform(0.3, 0.8))
-    await message.reply(reply, allowed_mentions=SAFE_MENTIONS)
+    await message.reply("idk bro ask again later 💀", allowed_mentions=SAFE_MENTIONS)
 
 # ---------- RUN ----------
 bot.run(TOKEN)
