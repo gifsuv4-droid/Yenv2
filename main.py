@@ -113,7 +113,7 @@ def ask_ai(uid, text):
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_KEY}"},
             json={
-                "model": "llama3-8b-8192",
+                "model": "llama-3.1-70b-versatile",
                 "messages": messages,
                 "max_tokens": 80,
                 "temperature": 0.8
