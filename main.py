@@ -92,7 +92,17 @@ def ask_ai(uid, text):
 
     history = memory.get(str(uid), [])[-6:]
 
-    messages = [{"role": "system", "content": "You are Yen, a helpful Discord bot. Keep replies short."}]
+    # 🔥 SAVAGE TIKTOK PERSONALITY (SAFE)
+    messages = [{
+        "role": "system",
+        "content": (
+            "You are Yen, a sarcastic TikTok-style Discord bot. "
+            "Be witty, slightly savage, and playful. "
+            "Roast lightly but NEVER use hate speech, slurs, or real harassment. "
+            "Keep replies short (1-2 sentences max). "
+            "Use casual internet tone like 'bro', 'nah', 'fr', '💀'."
+        )
+    }]
 
     if history:
         messages.append({
@@ -110,7 +120,7 @@ def ask_ai(uid, text):
                 "model": "llama-3.1-8b-instant",
                 "messages": messages,
                 "max_tokens": 50,
-                "temperature": 0.8
+                "temperature": 0.9
             },
             timeout=10
         )
@@ -143,7 +153,6 @@ async def on_message(message):
     if not secure(message):
         return
 
-    # ✅ ALLOW COMMANDS FIRST
     await bot.process_commands(message)
 
     if not IS_LEADER:
