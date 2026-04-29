@@ -10,7 +10,11 @@ if not TOKEN:
     raise ValueError("Missing TOKEN")
 
 intents = discord.Intents.all()
-bot = commands.Bot(command_prefix="yen ", intents=intents)
+
+bot = commands.Bot(
+    command_prefix=commands.when_mentioned_or("yen "),
+    intents=intents
+)
 
 SAFE = discord.AllowedMentions(everyone=False, roles=False, users=True)
 
@@ -37,7 +41,7 @@ memory = load(FILES["memory"])
 logs = load(FILES["logs"])
 ignore_roles = load(FILES["ignore"])
 
-# ================= NUCLEAR LOCK =================
+# ================= LOCK (ANTI DOUBLE RESPONSE) =================
 user_locks = {}
 
 async def acquire_lock(uid):
@@ -125,24 +129,24 @@ async def on_message(m):
     if not m or not m.guild or m.author.bot:
         return
 
-    # ✅ commands ALWAYS run
+    # ✅ ALWAYS process commands first
     await bot.process_commands(m)
 
-    # block lock from affecting commands
-    if m.content.startswith("yen "):
+    # ✅ stop if it's a command
+    if m.content.startswith("yen ") or m.content.startswith(f"<@{bot.user.id}>"):
         return
 
     if not IS_LEADER:
         return
 
-    lock = await acquire_lock(m.author.id)
-    if not lock:
-        return
+    msg = norm(m.content.lower())
 
-    try:
-        msg = norm(m.content.lower())
+    if msg.startswith("hey yen"):
+        lock = await acquire_lock(m.author.id)
+        if not lock:
+            return
 
-        if msg.startswith("hey yen"):
+        try:
             uid = str(m.author.id)
 
             memory.setdefault(uid, []).append(m.content)
@@ -154,13 +158,15 @@ async def on_message(m):
 
             await m.reply(reply, allowed_mentions=SAFE)
 
-    finally:
-        lock.release()
+        finally:
+            lock.release()
 
 # ================= READY =================
 @bot.event
 async def on_ready():
     global IS_LEADER
+    print(f"Logged in as {bot.user}")
+
     ch = bot.get_channel(LOCK_CHANNEL_ID)
 
     if ch:
@@ -177,7 +183,10 @@ class UserSelect(discord.ui.UserSelect):
 
     async def callback(self, interaction):
         self.view.target = self.values[0]
-        await interaction.response.edit_message(embed=self.view.embed(interaction.guild), view=self.view)
+        await interaction.response.edit_message(
+            embed=self.view.embed(interaction.guild),
+            view=self.view
+        )
 
 # ================= DASHBOARD =================
 class Dashboard(discord.ui.View):
@@ -194,6 +203,7 @@ class Dashboard(discord.ui.View):
         self.add_item(self.home_btn)
         self.add_item(self.logs_btn)
         self.add_item(self.punish_btn)
+
         if self.target.id == self.author.id:
             self.add_item(self.utility_btn)
 
@@ -224,11 +234,11 @@ class Dashboard(discord.ui.View):
 
         elif self.page == "utility":
             e.description = (
-                "Utility Commands:\n"
-                "- yen ignore @role\n"
-                "- yen unignore\n"
-                "- yen say <text>\n"
-                "- yen purge <amount>"
+                "Utility:\n"
+                "yen ignore @role\n"
+                "yen unignore\n"
+                "yen say <text>\n"
+                "yen purge <amount>"
             )
 
         return e
@@ -296,16 +306,19 @@ class Dashboard(discord.ui.View):
 # ================= COMMANDS =================
 @bot.command()
 async def dashboard(ctx, user: discord.Member = None):
+    print("DASHBOARD TRIGGERED")
+
     if not ctx.author.guild_permissions.administrator:
         return await ctx.send("no perms")
 
     user = user or ctx.author
-    await ctx.send("panel", view=Dashboard(user, ctx.author))
+    await ctx.reply("panel", view=Dashboard(user, ctx.author))
 
 @bot.command()
 async def ignore(ctx, role: discord.Role):
     if ctx.author.id != CREATOR_ID:
         return await ctx.send("no")
+
     ignore_roles[str(ctx.guild.id)] = str(role.id)
     save(FILES["ignore"], ignore_roles)
     await ctx.send(f"ignored {role.name}")
@@ -314,6 +327,7 @@ async def ignore(ctx, role: discord.Role):
 async def unignore(ctx):
     if ctx.author.id != CREATOR_ID:
         return await ctx.send("no")
+
     ignore_roles.pop(str(ctx.guild.id), None)
     save(FILES["ignore"], ignore_roles)
     await ctx.send("ignore cleared")
@@ -326,6 +340,7 @@ async def say(ctx, *, text):
 async def purge(ctx, amount: int):
     if not ctx.author.guild_permissions.manage_messages:
         return await ctx.send("no perms")
+
     await ctx.channel.purge(limit=amount + 1)
 
 # ================= RUN =================
