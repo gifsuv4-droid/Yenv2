@@ -40,10 +40,10 @@ ignore_roles = load(FILES["ignore"])
 # ================= NUCLEAR LOCK =================
 user_locks = {}
 
-async def acquire_lock(user_id):
-    if user_id not in user_locks:
-        user_locks[user_id] = asyncio.Lock()
-    lock = user_locks[user_id]
+async def acquire_lock(uid):
+    if uid not in user_locks:
+        user_locks[uid] = asyncio.Lock()
+    lock = user_locks[uid]
     if lock.locked():
         return None
     await lock.acquire()
@@ -65,7 +65,6 @@ def log(g, text):
 def top_role_filtered(member):
     ignored = ignore_roles.get(str(member.guild.id))
     roles = sorted(member.roles, key=lambda r: r.position, reverse=True)
-
     for r in roles:
         if str(r.id) != ignored:
             return r
@@ -96,7 +95,7 @@ def ask_ai(uid, text):
     }]
 
     if history:
-        messages.append({"role": "user","content": " | ".join(history)})
+        messages.append({"role": "user", "content": " | ".join(history)})
 
     messages.append({"role": "user", "content": text})
 
@@ -123,25 +122,27 @@ def ask_ai(uid, text):
 # ================= MESSAGE =================
 @bot.event
 async def on_message(m):
-
     if not m or not m.guild or m.author.bot:
         return
 
-    # 💣 NUCLEAR LOCK
+    # ✅ commands ALWAYS run
+    await bot.process_commands(m)
+
+    # block lock from affecting commands
+    if m.content.startswith("yen "):
+        return
+
+    if not IS_LEADER:
+        return
+
     lock = await acquire_lock(m.author.id)
     if not lock:
         return
 
     try:
-        await bot.process_commands(m)
-
-        if not IS_LEADER:
-            return
-
         msg = norm(m.content.lower())
 
         if msg.startswith("hey yen"):
-
             uid = str(m.author.id)
 
             memory.setdefault(uid, []).append(m.content)
@@ -149,7 +150,6 @@ async def on_message(m):
             save(FILES["memory"], memory)
 
             reply = ask_ai(uid, m.content)
-
             log(m.guild, f"AI {m.author}")
 
             await m.reply(reply, allowed_mentions=SAFE)
@@ -191,25 +191,23 @@ class Dashboard(discord.ui.View):
     def build_home(self):
         self.clear_items()
         self.add_item(UserSelect(self))
-        self.add_item(self.home)
+        self.add_item(self.home_btn)
         self.add_item(self.logs_btn)
-        self.add_item(self.punish)
-
-        # utilities ONLY if self-target
+        self.add_item(self.punish_btn)
         if self.target.id == self.author.id:
-            self.add_item(self.utility)
+            self.add_item(self.utility_btn)
 
     def build_punish(self):
         self.clear_items()
-        self.add_item(UserSelect(self))
-        self.add_item(self.home)
-        self.add_item(self.logs_btn)
-        self.add_item(self.punish)
+        self.build_home()
+        self.add_item(self.ban_btn)
+        self.add_item(self.kick_btn)
+        self.add_item(self.mute_btn)
+        self.add_item(self.unmute_btn)
 
-        self.add_item(self.ban)
-        self.add_item(self.kick)
-        self.add_item(self.mute)
-        self.add_item(self.unmute)
+    def build_utility(self):
+        self.clear_items()
+        self.build_home()
 
     def embed(self, g):
         e = discord.Embed(title="YEN PANEL", color=discord.Color.purple())
@@ -222,15 +220,22 @@ class Dashboard(discord.ui.View):
             e.description = "\n".join(data) if data else "No logs"
 
         elif self.page == "punish":
-            e.description = f"Target: {self.target}"
+            e.description = f"Target: {self.target}\nChoose action"
 
         elif self.page == "utility":
-            e.description = "Utility commands available:\n- yen ignore @role"
+            e.description = (
+                "Utility Commands:\n"
+                "- yen ignore @role\n"
+                "- yen unignore\n"
+                "- yen say <text>\n"
+                "- yen purge <amount>"
+            )
 
         return e
 
+    # NAV
     @discord.ui.button(label="HOME")
-    async def home(self, i, b):
+    async def home_btn(self, i, b):
         self.page = "home"
         self.build_home()
         await i.response.edit_message(embed=self.embed(i.guild), view=self)
@@ -242,63 +247,51 @@ class Dashboard(discord.ui.View):
         await i.response.edit_message(embed=self.embed(i.guild), view=self)
 
     @discord.ui.button(label="PUNISHMENT")
-    async def punish(self, i, b):
+    async def punish_btn(self, i, b):
         self.page = "punish"
         self.build_punish()
         await i.response.edit_message(embed=self.embed(i.guild), view=self)
 
     @discord.ui.button(label="UTILITY")
-    async def utility(self, i, b):
+    async def utility_btn(self, i, b):
         self.page = "utility"
-        self.build_home()
+        self.build_utility()
         await i.response.edit_message(embed=self.embed(i.guild), view=self)
 
-    # ===== ACTIONS =====
+    # ACTIONS
     @discord.ui.button(label="BAN")
-    async def ban(self, i, b):
+    async def ban_btn(self, i, b):
         if not can_act(i.user, self.target) or not bot_can(self.target, i.guild):
             return await i.response.send_message("no perms", ephemeral=True)
-        try:
-            await self.target.ban()
-            log(i.guild, f"BAN {self.target}")
-            await i.response.send_message("banned", ephemeral=True)
-        except:
-            await i.response.send_message("fail", ephemeral=True)
+        await self.target.ban()
+        log(i.guild, f"BAN {self.target}")
+        await i.response.send_message("banned", ephemeral=True)
 
     @discord.ui.button(label="KICK")
-    async def kick(self, i, b):
+    async def kick_btn(self, i, b):
         if not can_act(i.user, self.target) or not bot_can(self.target, i.guild):
             return await i.response.send_message("no perms", ephemeral=True)
-        try:
-            await self.target.kick()
-            log(i.guild, f"KICK {self.target}")
-            await i.response.send_message("kicked", ephemeral=True)
-        except:
-            await i.response.send_message("fail", ephemeral=True)
+        await self.target.kick()
+        log(i.guild, f"KICK {self.target}")
+        await i.response.send_message("kicked", ephemeral=True)
 
     @discord.ui.button(label="MUTE")
-    async def mute(self, i, b):
+    async def mute_btn(self, i, b):
         role = discord.utils.get(i.guild.roles, name="Muted")
         if not role:
             return await i.response.send_message("no muted role", ephemeral=True)
-        try:
-            await self.target.add_roles(role)
-            log(i.guild, f"MUTE {self.target}")
-            await i.response.send_message("muted", ephemeral=True)
-        except:
-            await i.response.send_message("fail", ephemeral=True)
+        await self.target.add_roles(role)
+        log(i.guild, f"MUTE {self.target}")
+        await i.response.send_message("muted", ephemeral=True)
 
     @discord.ui.button(label="UNMUTE")
-    async def unmute(self, i, b):
+    async def unmute_btn(self, i, b):
         role = discord.utils.get(i.guild.roles, name="Muted")
         if not role:
             return await i.response.send_message("no muted role", ephemeral=True)
-        try:
-            await self.target.remove_roles(role)
-            log(i.guild, f"UNMUTE {self.target}")
-            await i.response.send_message("unmuted", ephemeral=True)
-        except:
-            await i.response.send_message("fail", ephemeral=True)
+        await self.target.remove_roles(role)
+        log(i.guild, f"UNMUTE {self.target}")
+        await i.response.send_message("unmuted", ephemeral=True)
 
 # ================= COMMANDS =================
 @bot.command()
@@ -313,10 +306,27 @@ async def dashboard(ctx, user: discord.Member = None):
 async def ignore(ctx, role: discord.Role):
     if ctx.author.id != CREATOR_ID:
         return await ctx.send("no")
-
     ignore_roles[str(ctx.guild.id)] = str(role.id)
     save(FILES["ignore"], ignore_roles)
     await ctx.send(f"ignored {role.name}")
+
+@bot.command()
+async def unignore(ctx):
+    if ctx.author.id != CREATOR_ID:
+        return await ctx.send("no")
+    ignore_roles.pop(str(ctx.guild.id), None)
+    save(FILES["ignore"], ignore_roles)
+    await ctx.send("ignore cleared")
+
+@bot.command()
+async def say(ctx, *, text):
+    await ctx.send(text)
+
+@bot.command()
+async def purge(ctx, amount: int):
+    if not ctx.author.guild_permissions.manage_messages:
+        return await ctx.send("no perms")
+    await ctx.channel.purge(limit=amount + 1)
 
 # ================= RUN =================
 bot.run(TOKEN)
